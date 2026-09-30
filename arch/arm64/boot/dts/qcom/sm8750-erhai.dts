@@ -1312,6 +1312,16 @@
 	};
 };
 
+&csiphy4 {
+	vdda-0p9-supply = <&vreg_l3i_0p88>;
+	vdda-1p2-supply = <&vreg_l3g_1p2>;
+};
+
+&csiphy5 {
+	vdda-0p9-supply = <&vreg_l1f_0p88>;
+	vdda-1p2-supply = <&vreg_l3g_1p2>;
+};
+
 &qupv3_2 {
 	status = "okay";
 };
