@@ -34,6 +34,31 @@
 	#address-cells = <2>;
 	#size-cells = <2>;
 
+	csiphy_opp_table: opp-table-csiphy {
+		compatible = "operating-points-v2";
+
+		opp-266666667 {
+			opp-hz = /bits/ 64 <266666667>;
+			required-opps = <&rpmhpd_opp_low_svs_d1>,
+					<&rpmhpd_opp_low_svs_d1>,
+					<&rpmhpd_opp_low_svs_d1>;
+		};
+
+		opp-400000000 {
+			opp-hz = /bits/ 64 <400000000>;
+			required-opps = <&rpmhpd_opp_low_svs>,
+					<&rpmhpd_opp_low_svs>,
+					<&rpmhpd_opp_low_svs>;
+		};
+
+		opp-480000000 {
+			opp-hz = /bits/ 64 <480000000>;
+			required-opps = <&rpmhpd_opp_svs>,
+					<&rpmhpd_opp_svs>,
+					<&rpmhpd_opp_svs>;
+		};
+	};
+
 	cpus {
 		#address-cells = <2>;
 		#size-cells = <0>;
@@ -3159,12 +3184,6 @@
 			      <0x0 0x0ad2d000 0x0 0x2b00>,
 			      <0x0 0x0ad6d000 0x0 0xa00>,
 			      <0x0 0x0ad72000 0x0 0xa00>,
-			      <0x0 0x0ada9000 0x0 0x2000>,
-			      <0x0 0x0adab000 0x0 0x2000>,
-			      <0x0 0x0adad000 0x0 0x2000>,
-			      <0x0 0x0adaf000 0x0 0x2000>,
-			      <0x0 0x0adb1000 0x0 0x2000>,
-			      <0x0 0x0adb3000 0x0 0x2000>,
 			      <0x0 0x0ad8b000 0x0 0x400>,
 			      <0x0 0x0ad8c000 0x0 0x400>,
 			      <0x0 0x0ad8d000 0x0 0x400>,
@@ -3178,12 +3197,6 @@
 				    "csid2",
 				    "csid_lite0",
 				    "csid_lite1",
-				    "csiphy0",
-				    "csiphy1",
-				    "csiphy2",
-				    "csiphy3",
-				    "csiphy4",
-				    "csiphy5",
 				    "csitpg0",
 				    "csitpg1",
 				    "csitpg2",
@@ -3203,18 +3216,6 @@
 				 <&camcc CAM_CC_CAMNOC_RT_IFE_LITE_CLK>,
 				 <&camcc CAM_CC_CSID_CLK>,
 				 <&camcc CAM_CC_CSID_CSIPHY_RX_CLK>,
-				 <&camcc CAM_CC_CSIPHY0_CLK>,
-				 <&camcc CAM_CC_CSI0PHYTIMER_CLK>,
-				 <&camcc CAM_CC_CSIPHY1_CLK>,
-				 <&camcc CAM_CC_CSI1PHYTIMER_CLK>,
-				 <&camcc CAM_CC_CSIPHY2_CLK>,
-				 <&camcc CAM_CC_CSI2PHYTIMER_CLK>,
-				 <&camcc CAM_CC_CSIPHY3_CLK>,
-				 <&camcc CAM_CC_CSI3PHYTIMER_CLK>,
-				 <&camcc CAM_CC_CSIPHY4_CLK>,
-				 <&camcc CAM_CC_CSI4PHYTIMER_CLK>,
-				 <&camcc CAM_CC_CSIPHY5_CLK>,
-				 <&camcc CAM_CC_CSI5PHYTIMER_CLK>,
 				 <&gcc GCC_CAMERA_HF_AXI_CLK>,
 				 <&gcc GCC_CAMERA_SF_AXI_CLK>,
 				 <&camcc CAM_CC_TFE_0_MAIN_CLK>,
@@ -3238,18 +3239,6 @@
 				      "cpas_vfe_lite",
 				      "csid",
 				      "csid_csiphy_rx",
-				      "csiphy0",
-				      "csiphy0_timer",
-				      "csiphy1",
-				      "csiphy1_timer",
-				      "csiphy2",
-				      "csiphy2_timer",
-				      "csiphy3",
-				      "csiphy3_timer",
-				      "csiphy4",
-				      "csiphy4_timer",
-				      "csiphy5",
-				      "csiphy5_timer",
 				      "gcc_axi_hf",
 				      "gcc_axi_sf",
 				      "vfe0",
@@ -3269,12 +3258,6 @@
 				     <GIC_SPI 431 IRQ_TYPE_EDGE_RISING>,
 				     <GIC_SPI 605 IRQ_TYPE_EDGE_RISING>,
 				     <GIC_SPI 376 IRQ_TYPE_EDGE_RISING>,
-				     <GIC_SPI 477 IRQ_TYPE_EDGE_RISING>,
-				     <GIC_SPI 478 IRQ_TYPE_EDGE_RISING>,
-				     <GIC_SPI 479 IRQ_TYPE_EDGE_RISING>,
-				     <GIC_SPI 448 IRQ_TYPE_EDGE_RISING>,
-				     <GIC_SPI 122 IRQ_TYPE_EDGE_RISING>,
-				     <GIC_SPI 89 IRQ_TYPE_EDGE_RISING>,
 				     <GIC_SPI 433 IRQ_TYPE_EDGE_RISING>,
 				     <GIC_SPI 436 IRQ_TYPE_EDGE_RISING>,
 				     <GIC_SPI 457 IRQ_TYPE_EDGE_RISING>,
@@ -3285,12 +3268,6 @@
 					  "csid2",
 					  "csid_lite0",
 					  "csid_lite1",
-					  "csiphy0",
-					  "csiphy1",
-					  "csiphy2",
-					  "csiphy3",
-					  "csiphy4",
-					  "csiphy5",
 					  "vfe0",
 					  "vfe1",
 					  "vfe2",
@@ -3329,29 +3306,292 @@
 
 				port@0 {
 					reg = <0>;
+
+					camss_csiphy0_in: endpoint {
+						remote-endpoint = <&csiphy0_out>;
+					};
 				};
 
 				port@1 {
 					reg = <1>;
+
+					camss_csiphy1_in: endpoint {
+						remote-endpoint = <&csiphy1_out>;
+					};
 				};
 
 				port@2 {
 					reg = <2>;
+
+					camss_csiphy2_in: endpoint {
+						remote-endpoint = <&csiphy2_out>;
+					};
 				};
 
 				port@3 {
 					reg = <3>;
+
+					camss_csiphy3_in: endpoint {
+						remote-endpoint = <&csiphy3_out>;
+					};
 				};
 
 				port@4 {
 					reg = <4>;
+
+					camss_csiphy4_in: endpoint {
+						remote-endpoint = <&csiphy4_out>;
+					};
 				};
 
 				port@5 {
 					reg = <5>;
+
+					camss_csiphy5_in: endpoint {
+						remote-endpoint = <&csiphy5_out>;
+					};
 				};
 			};
+		};
 
+		csiphy0: phy@ada9000 {
+			compatible = "qcom,sm8750-csi2-phy";
+			reg = <0x0 0x0ada9000 0x0 0x2000>;
+			interrupts = <GIC_SPI 477 IRQ_TYPE_EDGE_RISING>;
+
+			clocks = <&camcc CAM_CC_CSIPHY0_CLK>,
+				 <&camcc CAM_CC_CSI0PHYTIMER_CLK>,
+				 <&camcc CAM_CC_CORE_AHB_CLK>;
+			clock-names = "core", "timer", "ahb";
+			operating-points-v2 = <&csiphy_opp_table>;
+
+			power-domains = <&camcc CAM_CC_TITAN_TOP_GDSC>,
+					<&rpmhpd RPMHPD_MMCX>,
+					<&rpmhpd RPMHPD_MX>,
+					<&rpmhpd RPMHPD_MXC>;
+			power-domain-names = "top", "mmcx", "mx", "mxc";
+
+			status = "disabled";
+
+			ports {
+				#address-cells = <1>;
+				#size-cells = <0>;
+
+				port@0 {
+					reg = <0>;
+
+					csiphy0_in: endpoint {
+					};
+				};
+
+				port@1 {
+					reg = <1>;
+
+					csiphy0_out: endpoint {
+						remote-endpoint = <&camss_csiphy0_in>;
+					};
+				};
+			};
+		};
+
+		csiphy1: phy@adab000 {
+			compatible = "qcom,sm8750-csi2-phy";
+			reg = <0x0 0x0adab000 0x0 0x2000>;
+			interrupts = <GIC_SPI 478 IRQ_TYPE_EDGE_RISING>;
+
+			clocks = <&camcc CAM_CC_CSIPHY1_CLK>,
+				 <&camcc CAM_CC_CSI1PHYTIMER_CLK>,
+				 <&camcc CAM_CC_CORE_AHB_CLK>;
+			clock-names = "core", "timer", "ahb";
+			operating-points-v2 = <&csiphy_opp_table>;
+
+			power-domains = <&camcc CAM_CC_TITAN_TOP_GDSC>,
+					<&rpmhpd RPMHPD_MMCX>,
+					<&rpmhpd RPMHPD_MX>,
+					<&rpmhpd RPMHPD_MXC>;
+			power-domain-names = "top", "mmcx", "mx", "mxc";
+
+			status = "disabled";
+
+			ports {
+				#address-cells = <1>;
+				#size-cells = <0>;
+
+				port@0 {
+					reg = <0>;
+
+					csiphy1_in: endpoint {
+					};
+				};
+
+				port@1 {
+					reg = <1>;
+
+					csiphy1_out: endpoint {
+						remote-endpoint = <&camss_csiphy1_in>;
+					};
+				};
+			};
+		};
+
+		csiphy2: phy@adad000 {
+			compatible = "qcom,sm8750-csi2-phy";
+			reg = <0x0 0x0adad000 0x0 0x2000>;
+			interrupts = <GIC_SPI 479 IRQ_TYPE_EDGE_RISING>;
+
+			clocks = <&camcc CAM_CC_CSIPHY2_CLK>,
+				 <&camcc CAM_CC_CSI2PHYTIMER_CLK>,
+				 <&camcc CAM_CC_CORE_AHB_CLK>;
+			clock-names = "core", "timer", "ahb";
+			operating-points-v2 = <&csiphy_opp_table>;
+
+			power-domains = <&camcc CAM_CC_TITAN_TOP_GDSC>,
+					<&rpmhpd RPMHPD_MMCX>,
+					<&rpmhpd RPMHPD_MX>,
+					<&rpmhpd RPMHPD_MXC>;
+			power-domain-names = "top", "mmcx", "mx", "mxc";
+
+			status = "disabled";
+
+			ports {
+				#address-cells = <1>;
+				#size-cells = <0>;
+
+				port@0 {
+					reg = <0>;
+
+					csiphy2_in: endpoint {
+					};
+				};
+
+				port@1 {
+					reg = <1>;
+
+					csiphy2_out: endpoint {
+						remote-endpoint = <&camss_csiphy2_in>;
+					};
+				};
+			};
+		};
+
+		csiphy3: phy@adaf000 {
+			compatible = "qcom,sm8750-csi2-phy";
+			reg = <0x0 0x0adaf000 0x0 0x2000>;
+			interrupts = <GIC_SPI 448 IRQ_TYPE_EDGE_RISING>;
+
+			clocks = <&camcc CAM_CC_CSIPHY3_CLK>,
+				 <&camcc CAM_CC_CSI3PHYTIMER_CLK>,
+				 <&camcc CAM_CC_CORE_AHB_CLK>;
+			clock-names = "core", "timer", "ahb";
+			operating-points-v2 = <&csiphy_opp_table>;
+
+			power-domains = <&camcc CAM_CC_TITAN_TOP_GDSC>,
+					<&rpmhpd RPMHPD_MMCX>,
+					<&rpmhpd RPMHPD_MX>,
+					<&rpmhpd RPMHPD_MXC>;
+			power-domain-names = "top", "mmcx", "mx", "mxc";
+
+			status = "disabled";
+
+			ports {
+				#address-cells = <1>;
+				#size-cells = <0>;
+
+				port@0 {
+					reg = <0>;
+
+					csiphy3_in: endpoint {
+					};
+				};
+
+				port@1 {
+					reg = <1>;
+
+					csiphy3_out: endpoint {
+						remote-endpoint = <&camss_csiphy3_in>;
+					};
+				};
+			};
+		};
+
+		csiphy4: phy@adb1000 {
+			compatible = "qcom,sm8750-csi2-phy";
+			reg = <0x0 0x0adb1000 0x0 0x2000>;
+			interrupts = <GIC_SPI 122 IRQ_TYPE_EDGE_RISING>;
+
+			clocks = <&camcc CAM_CC_CSIPHY4_CLK>,
+				 <&camcc CAM_CC_CSI4PHYTIMER_CLK>,
+				 <&camcc CAM_CC_CORE_AHB_CLK>;
+			clock-names = "core", "timer", "ahb";
+			operating-points-v2 = <&csiphy_opp_table>;
+
+			power-domains = <&camcc CAM_CC_TITAN_TOP_GDSC>,
+					<&rpmhpd RPMHPD_MMCX>,
+					<&rpmhpd RPMHPD_MX>,
+					<&rpmhpd RPMHPD_MXC>;
+			power-domain-names = "top", "mmcx", "mx", "mxc";
+
+			status = "disabled";
+
+			ports {
+				#address-cells = <1>;
+				#size-cells = <0>;
+
+				port@0 {
+					reg = <0>;
+
+					csiphy4_in: endpoint {
+					};
+				};
+
+				port@1 {
+					reg = <1>;
+
+					csiphy4_out: endpoint {
+						remote-endpoint = <&camss_csiphy4_in>;
+					};
+				};
+			};
+		};
+
+		csiphy5: phy@adb3000 {
+			compatible = "qcom,sm8750-csi2-phy";
+			reg = <0x0 0x0adb3000 0x0 0x2000>;
+			interrupts = <GIC_SPI 89 IRQ_TYPE_EDGE_RISING>;
+
+			clocks = <&camcc CAM_CC_CSIPHY5_CLK>,
+				 <&camcc CAM_CC_CSI5PHYTIMER_CLK>,
+				 <&camcc CAM_CC_CORE_AHB_CLK>;
+			clock-names = "core", "timer", "ahb";
+			operating-points-v2 = <&csiphy_opp_table>;
+
+			power-domains = <&camcc CAM_CC_TITAN_TOP_GDSC>,
+					<&rpmhpd RPMHPD_MMCX>,
+					<&rpmhpd RPMHPD_MX>,
+					<&rpmhpd RPMHPD_MXC>;
+			power-domain-names = "top", "mmcx", "mx", "mxc";
+
+			status = "disabled";
+
+			ports {
+				#address-cells = <1>;
+				#size-cells = <0>;
+
+				port@0 {
+					reg = <0>;
+
+					csiphy5_in: endpoint {
+					};
+				};
+
+				port@1 {
+					reg = <1>;
+
+					csiphy5_out: endpoint {
+						remote-endpoint = <&camss_csiphy5_in>;
+					};
+				};
+			};
 		};
 
 		mdss: display-subsystem@ae00000 {
