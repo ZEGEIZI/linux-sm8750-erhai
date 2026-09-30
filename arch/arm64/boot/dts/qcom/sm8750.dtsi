@@ -3292,11 +3292,22 @@
 			power-domains = <&camcc CAM_CC_TFE_0_GDSC>,
 					<&camcc CAM_CC_TFE_1_GDSC>,
 					<&camcc CAM_CC_TFE_2_GDSC>,
-					<&camcc CAM_CC_TITAN_TOP_GDSC>;
+					<&camcc CAM_CC_TITAN_TOP_GDSC>,
+					<&rpmhpd RPMHPD_MMCX>,
+					<&rpmhpd RPMHPD_MX>,
+					<&rpmhpd RPMHPD_MXC>;
 			power-domain-names = "ife0",
 					     "ife1",
 					     "ife2",
-					     "top";
+					     "top",
+					     "mmcx",
+					     "mx",
+					     "mxc";
+			/* Cover all supported VFE/CSID rates while CAMSS is active. */
+			required-opps = <0>, <0>, <0>, <0>,
+					<&rpmhpd_opp_nom>,
+					<&rpmhpd_opp_svs>,
+					<&rpmhpd_opp_nom>;
 
 			status = "disabled";
 
