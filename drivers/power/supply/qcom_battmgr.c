@@ -2135,7 +2135,7 @@ static const u8 sm8350_usb_prop_map[] = {
 	[POWER_SUPPLY_PROP_CURRENT_NOW] = USB_CURR_NOW,
 	[POWER_SUPPLY_PROP_CURRENT_MAX] = USB_CURR_MAX,
 	[POWER_SUPPLY_PROP_INPUT_CURRENT_LIMIT] = USB_INPUT_CURR_LIMIT,
-	[POWER_SUPPLY_PROP_USB_TYPE] = USB_TYPE,
+	[POWER_SUPPLY_PROP_USB_TYPE] = USB_ADAP_TYPE,
 };
 
 static int qcom_battmgr_usb_sm8350_update(struct qcom_battmgr *battmgr,
@@ -2148,9 +2148,6 @@ static int qcom_battmgr_usb_sm8350_update(struct qcom_battmgr *battmgr,
 		return -EINVAL;
 
 	prop = sm8350_usb_prop_map[psp];
-	if (psp == POWER_SUPPLY_PROP_USB_TYPE &&
-	    (battmgr->quirks & QCOM_BATTMGR_QUIRK_OPLUS_PD))
-		prop = USB_ADAP_TYPE;
 
 	mutex_lock(&battmgr->lock);
 	ret = qcom_battmgr_request_property(battmgr, BATTMGR_USB_PROPERTY_GET, prop, 0);
@@ -2725,11 +2722,12 @@ static void qcom_battmgr_sm8350_callback(struct qcom_battmgr *battmgr,
 		case USB_INPUT_CURR_LIMIT:
 			battmgr->usb.current_limit = le32_to_cpu(resp->intval.value);
 			break;
-		case USB_TYPE:
-			battmgr->usb.usb_type = le32_to_cpu(resp->intval.value);
-			break;
 		case USB_ADAP_TYPE:
 			val = le32_to_cpu(resp->intval.value);
+			if (!(battmgr->quirks & QCOM_BATTMGR_QUIRK_OPLUS_PD)) {
+				battmgr->usb.usb_type = val;
+				break;
+			}
 			if (val == OPLUS_USB_TYPE_PD_SDP)
 				val = POWER_SUPPLY_USB_TYPE_PD;
 			else if (val >= 0x80 && val <= 0x82)
