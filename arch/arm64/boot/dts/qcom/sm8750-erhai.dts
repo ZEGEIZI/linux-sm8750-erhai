@@ -1431,6 +1431,10 @@
 	};
 };
 
+&crypto {
+	status = "disabled";
+};
+
 &csiphy0_out {
 	/delete-property/ remote-endpoint;
 };
