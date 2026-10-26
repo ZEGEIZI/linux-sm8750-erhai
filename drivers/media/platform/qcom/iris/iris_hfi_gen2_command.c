@@ -710,3 +710,714 @@ static int iris_hfi_gen2_session_set_config_params(struct iris_inst *inst, u32 p
 		{HFI_PROP_AV1_FILM_GRAIN_PRESENT,     iris_hfi_gen2_set_film_grain             },
 		{HFI_PROP_AV1_SUPER_BLOCK_ENABLED,    iris_hfi_gen2_set_super_block            },
 		{HFI_PROP_DECODE_ORDER_OUTPUT,        iris_hfi_gen2_set_decode_order_output    },
+	};
+
+	if (inst->domain == DECODER) {
+		if (V4L2_TYPE_IS_OUTPUT(plane)) {
+			if (inst->codec == V4L2_PIX_FMT_H264) {
+				config_params = fdata->dec_input_config_params_default;
+				config_params_size = fdata->dec_input_config_params_default_size;
+			} else if (inst->codec == V4L2_PIX_FMT_HEVC) {
+				config_params = fdata->dec_input_config_params_hevc;
+				config_params_size = fdata->dec_input_config_params_hevc_size;
+			} else if (inst->codec == V4L2_PIX_FMT_VP9) {
+				config_params = fdata->dec_input_config_params_vp9;
+				config_params_size = fdata->dec_input_config_params_vp9_size;
+			} else if (inst->codec == V4L2_PIX_FMT_AV1) {
+				config_params = fdata->dec_input_config_params_av1;
+				config_params_size = fdata->dec_input_config_params_av1_size;
+			} else {
+				return -EINVAL;
+			}
+		} else {
+			config_params = fdata->dec_output_config_params;
+			config_params_size = fdata->dec_output_config_params_size;
+		}
+	} else {
+		if (V4L2_TYPE_IS_OUTPUT(plane)) {
+			config_params = fdata->enc_input_config_params;
+			config_params_size = fdata->enc_input_config_params_size;
+		} else {
+			config_params = fdata->enc_output_config_params;
+			config_params_size = fdata->enc_output_config_params_size;
+		}
+	}
+
+	if (!config_params || !config_params_size)
+		return -EINVAL;
+
+	for (i = 0; i < config_params_size; i++) {
+		for (j = 0; j < ARRAY_SIZE(prop_type_handle_arr); j++) {
+			if (prop_type_handle_arr[j].type == config_params[i]) {
+				ret = prop_type_handle_arr[j].handle(inst, plane);
+				if (ret)
+					return ret;
+				break;
+			}
+		}
+	}
+
+	return 0;
+}
+
+static int iris_hfi_gen2_session_set_codec(struct iris_inst *inst)
+{
+	struct iris_inst_hfi_gen2 *inst_hfi_gen2 = to_iris_inst_hfi_gen2(inst);
+	u32 codec = 0;
+
+	switch (inst->codec) {
+	case V4L2_PIX_FMT_H264:
+		if (inst->domain == ENCODER)
+			codec = HFI_CODEC_ENCODE_AVC;
+		else
+			codec = HFI_CODEC_DECODE_AVC;
+		break;
+	case V4L2_PIX_FMT_HEVC:
+		if (inst->domain == ENCODER)
+			codec = HFI_CODEC_ENCODE_HEVC;
+		else
+			codec = HFI_CODEC_DECODE_HEVC;
+		break;
+	case V4L2_PIX_FMT_VP9:
+		codec = HFI_CODEC_DECODE_VP9;
+		break;
+	case V4L2_PIX_FMT_AV1:
+		codec = HFI_CODEC_DECODE_AV1;
+	}
+
+	iris_hfi_gen2_packet_session_property(inst,
+					      HFI_PROP_CODEC,
+					      HFI_HOST_FLAGS_NONE,
+					      HFI_PORT_NONE,
+					      HFI_PAYLOAD_U32_ENUM,
+					      &codec,
+					      sizeof(u32));
+
+	return iris_hfi_queue_cmd_write(inst->core, inst_hfi_gen2->packet,
+					inst_hfi_gen2->packet->size);
+}
+
+static int iris_hfi_gen2_session_set_default_header(struct iris_inst *inst)
+{
+	struct iris_inst_hfi_gen2 *inst_hfi_gen2 = to_iris_inst_hfi_gen2(inst);
+	u32 default_header = false;
+
+	iris_hfi_gen2_packet_session_property(inst,
+					      HFI_PROP_DEC_DEFAULT_HEADER,
+					      HFI_HOST_FLAGS_NONE,
+					      HFI_PORT_BITSTREAM,
+					      HFI_PAYLOAD_U32,
+					      &default_header,
+					      sizeof(u32));
+
+	return iris_hfi_queue_cmd_write(inst->core, inst_hfi_gen2->packet,
+					inst_hfi_gen2->packet->size);
+}
+
+static int iris_hfi_gen2_session_open(struct iris_inst *inst)
+{
+	struct iris_inst_hfi_gen2 *inst_hfi_gen2 = to_iris_inst_hfi_gen2(inst);
+	int ret;
+
+	if (inst->state != IRIS_INST_DEINIT)
+		return -EALREADY;
+
+	inst_hfi_gen2->ipsc_properties_set = false;
+	inst_hfi_gen2->opsc_properties_set = false;
+
+	inst_hfi_gen2->packet = kzalloc(4096, GFP_KERNEL);
+	if (!inst_hfi_gen2->packet)
+		return -ENOMEM;
+
+	iris_hfi_gen2_packet_session_command(inst,
+					     HFI_CMD_OPEN,
+					     HFI_HOST_FLAGS_RESPONSE_REQUIRED |
+					     HFI_HOST_FLAGS_INTR_REQUIRED,
+					     HFI_PORT_NONE,
+					     0,
+					     HFI_PAYLOAD_U32,
+					     &inst->session_id,
+					     sizeof(u32));
+
+	ret = iris_hfi_queue_cmd_write(inst->core, inst_hfi_gen2->packet,
+				       inst_hfi_gen2->packet->size);
+	if (ret)
+		goto fail_free_packet;
+
+	ret = iris_hfi_gen2_session_set_codec(inst);
+	if (ret)
+		goto fail_free_packet;
+
+	if (inst->domain == DECODER) {
+		ret = iris_hfi_gen2_session_set_default_header(inst);
+		if (ret)
+			goto fail_free_packet;
+	}
+
+	return 0;
+
+fail_free_packet:
+	kfree(inst_hfi_gen2->packet);
+	inst_hfi_gen2->packet = NULL;
+
+	return ret;
+}
+
+static int iris_hfi_gen2_session_close(struct iris_inst *inst)
+{
+	struct iris_inst_hfi_gen2 *inst_hfi_gen2 = to_iris_inst_hfi_gen2(inst);
+	int ret;
+
+	if (!inst_hfi_gen2->packet)
+		return -EINVAL;
+
+	iris_hfi_gen2_packet_session_command(inst,
+					     HFI_CMD_CLOSE,
+					     (HFI_HOST_FLAGS_RESPONSE_REQUIRED |
+					     HFI_HOST_FLAGS_INTR_REQUIRED |
+					     HFI_HOST_FLAGS_NON_DISCARDABLE),
+					     HFI_PORT_NONE,
+					     inst->session_id,
+					     HFI_PAYLOAD_NONE,
+					     NULL,
+					     0);
+
+	ret = iris_hfi_queue_cmd_write(inst->core, inst_hfi_gen2->packet,
+				       inst_hfi_gen2->packet->size);
+
+	kfree(inst_hfi_gen2->packet);
+	inst_hfi_gen2->packet = NULL;
+
+	return ret;
+}
+
+static int iris_hfi_gen2_session_subscribe_mode(struct iris_inst *inst,
+						u32 cmd, u32 plane, u32 payload_type,
+						void *payload, u32 payload_size)
+{
+	struct iris_inst_hfi_gen2 *inst_hfi_gen2 = to_iris_inst_hfi_gen2(inst);
+
+	iris_hfi_gen2_packet_session_command(inst,
+					     cmd,
+					     (HFI_HOST_FLAGS_RESPONSE_REQUIRED |
+					     HFI_HOST_FLAGS_INTR_REQUIRED),
+					     iris_hfi_gen2_get_port(inst, plane),
+					     inst->session_id,
+					     payload_type,
+					     payload,
+					     payload_size);
+
+	return iris_hfi_queue_cmd_write(inst->core, inst_hfi_gen2->packet,
+					inst_hfi_gen2->packet->size);
+}
+
+static int iris_hfi_gen2_subscribe_change_param(struct iris_inst *inst, u32 plane)
+{
+	struct iris_inst_hfi_gen2 *inst_hfi_gen2 = to_iris_inst_hfi_gen2(inst);
+	struct hfi_subscription_params subsc_params;
+	u32 prop_type, payload_size, payload_type;
+	struct iris_core *core = inst->core;
+	const u32 *change_param = NULL;
+	u32 change_param_size = 0;
+	u32 payload[32] = {0};
+	u32 hfi_port = 0, i;
+	int ret;
+
+	if (inst->domain == ENCODER)
+		return 0;
+
+	if ((V4L2_TYPE_IS_OUTPUT(plane) && inst_hfi_gen2->ipsc_properties_set) ||
+	    (V4L2_TYPE_IS_CAPTURE(plane) && inst_hfi_gen2->opsc_properties_set)) {
+		dev_dbg(core->dev, "%cPSC already set\n", V4L2_TYPE_IS_OUTPUT(plane) ? 'I' : 'O');
+		return 0;
+	}
+
+	switch (inst->codec) {
+	case V4L2_PIX_FMT_H264:
+		change_param = core->iris_firmware_data->dec_input_config_params_default;
+		change_param_size =
+			core->iris_firmware_data->dec_input_config_params_default_size;
+		break;
+	case V4L2_PIX_FMT_HEVC:
+		change_param = core->iris_firmware_data->dec_input_config_params_hevc;
+		change_param_size =
+			core->iris_firmware_data->dec_input_config_params_hevc_size;
+		break;
+	case V4L2_PIX_FMT_VP9:
+		change_param = core->iris_firmware_data->dec_input_config_params_vp9;
+		change_param_size =
+			core->iris_firmware_data->dec_input_config_params_vp9_size;
+		break;
+	case V4L2_PIX_FMT_AV1:
+		change_param = core->iris_firmware_data->dec_input_config_params_av1;
+		change_param_size =
+			core->iris_firmware_data->dec_input_config_params_av1_size;
+		break;
+	}
+
+	payload[0] = HFI_MODE_PORT_SETTINGS_CHANGE;
+
+	for (i = 0; i < change_param_size; i++)
+		payload[i + 1] = change_param[i];
+
+	ret = iris_hfi_gen2_session_subscribe_mode(inst,
+						   HFI_CMD_SUBSCRIBE_MODE,
+						   plane,
+						   HFI_PAYLOAD_U32_ARRAY,
+						   &payload[0],
+						   ((change_param_size + 1) * sizeof(u32)));
+	if (ret)
+		return ret;
+
+	if (V4L2_TYPE_IS_OUTPUT(plane)) {
+		inst_hfi_gen2->ipsc_properties_set = true;
+	} else {
+		hfi_port = iris_hfi_gen2_get_port(inst, V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE);
+		memcpy(&inst_hfi_gen2->dst_subcr_params,
+		       &inst_hfi_gen2->src_subcr_params,
+		       sizeof(inst_hfi_gen2->src_subcr_params));
+		subsc_params = inst_hfi_gen2->dst_subcr_params;
+		for (i = 0; i < change_param_size; i++) {
+			payload[0] = 0;
+			payload[1] = 0;
+			payload_size = 0;
+			payload_type = 0;
+			prop_type = change_param[i];
+			switch (prop_type) {
+			case HFI_PROP_BITSTREAM_RESOLUTION:
+				payload[0] = subsc_params.bitstream_resolution;
+				payload_size = sizeof(u32);
+				payload_type = HFI_PAYLOAD_U32;
+				break;
+			case HFI_PROP_CROP_OFFSETS:
+				payload[0] = subsc_params.crop_offsets[0];
+				payload[1] = subsc_params.crop_offsets[1];
+				payload_size = sizeof(u64);
+				payload_type = HFI_PAYLOAD_64_PACKED;
+				break;
+			case HFI_PROP_CODED_FRAMES:
+				payload[0] = subsc_params.coded_frames;
+				payload_size = sizeof(u32);
+				payload_type = HFI_PAYLOAD_U32;
+				break;
+			case HFI_PROP_LUMA_CHROMA_BIT_DEPTH:
+				payload[0] = subsc_params.bit_depth;
+				payload_size = sizeof(u32);
+				payload_type = HFI_PAYLOAD_U32;
+				break;
+			case HFI_PROP_BUFFER_FW_MIN_OUTPUT_COUNT:
+				payload[0] = subsc_params.fw_min_count;
+				payload_size = sizeof(u32);
+				payload_type = HFI_PAYLOAD_U32;
+				break;
+			case HFI_PROP_PIC_ORDER_CNT_TYPE:
+				payload[0] = subsc_params.pic_order_cnt;
+				payload_size = sizeof(u32);
+				payload_type = HFI_PAYLOAD_U32;
+				break;
+			case HFI_PROP_SIGNAL_COLOR_INFO:
+				payload[0] = subsc_params.color_info;
+				payload_size = sizeof(u32);
+				payload_type = HFI_PAYLOAD_U32;
+				break;
+			case HFI_PROP_PROFILE:
+				payload[0] = subsc_params.profile;
+				payload_size = sizeof(u32);
+				payload_type = HFI_PAYLOAD_U32;
+				break;
+			case HFI_PROP_LEVEL:
+				payload[0] = subsc_params.level;
+				payload_size = sizeof(u32);
+				payload_type = HFI_PAYLOAD_U32;
+				break;
+			case HFI_PROP_TIER:
+				payload[0] = subsc_params.tier;
+				payload_size = sizeof(u32);
+				payload_type = HFI_PAYLOAD_U32;
+				break;
+			case HFI_PROP_AV1_FILM_GRAIN_PRESENT:
+				payload[0] = subsc_params.film_grain;
+				payload_size = sizeof(u32);
+				payload_type = HFI_PAYLOAD_U32;
+				break;
+			case HFI_PROP_AV1_SUPER_BLOCK_ENABLED:
+				payload[0] = subsc_params.super_block;
+				payload_size = sizeof(u32);
+				payload_type = HFI_PAYLOAD_U32;
+				break;
+			default:
+				prop_type = 0;
+				ret = -EINVAL;
+				break;
+			}
+			if (prop_type) {
+				ret = iris_hfi_gen2_session_set_property(inst,
+									 prop_type,
+									 HFI_HOST_FLAGS_NONE,
+									 hfi_port,
+									 payload_type,
+									 &payload,
+									 payload_size);
+				if (ret)
+					return ret;
+			}
+		}
+		inst_hfi_gen2->opsc_properties_set = true;
+	}
+
+	return 0;
+}
+
+static int iris_hfi_gen2_subscribe_property(struct iris_inst *inst, u32 plane)
+{
+	struct iris_core *core = inst->core;
+	u32 subscribe_prop_size = 0, i;
+	const u32 *subcribe_prop = NULL;
+	u32 payload[32] = {0};
+
+	payload[0] = HFI_MODE_PROPERTY;
+
+	if (inst->domain == ENCODER)
+		return 0;
+
+	if (V4L2_TYPE_IS_OUTPUT(plane)) {
+		subscribe_prop_size = core->iris_firmware_data->dec_input_prop_size;
+		subcribe_prop = core->iris_firmware_data->dec_input_prop;
+	} else {
+		switch (inst->codec) {
+		case V4L2_PIX_FMT_H264:
+			subcribe_prop = core->iris_firmware_data->dec_output_prop_avc;
+			subscribe_prop_size =
+				core->iris_firmware_data->dec_output_prop_avc_size;
+			break;
+		case V4L2_PIX_FMT_HEVC:
+			subcribe_prop = core->iris_firmware_data->dec_output_prop_hevc;
+			subscribe_prop_size =
+				core->iris_firmware_data->dec_output_prop_hevc_size;
+			break;
+		case V4L2_PIX_FMT_VP9:
+			subcribe_prop = core->iris_firmware_data->dec_output_prop_vp9;
+			subscribe_prop_size =
+				core->iris_firmware_data->dec_output_prop_vp9_size;
+			break;
+		case V4L2_PIX_FMT_AV1:
+			subcribe_prop = core->iris_firmware_data->dec_output_prop_av1;
+			subscribe_prop_size =
+				core->iris_firmware_data->dec_output_prop_av1_size;
+			break;
+		}
+	}
+
+	for (i = 0; i < subscribe_prop_size; i++)
+		payload[i + 1] = subcribe_prop[i];
+
+	return iris_hfi_gen2_session_subscribe_mode(inst,
+						    HFI_CMD_SUBSCRIBE_MODE,
+						    plane,
+						    HFI_PAYLOAD_U32_ARRAY,
+						    &payload[0],
+						    (subscribe_prop_size + 1) * sizeof(u32));
+}
+
+static int iris_hfi_gen2_session_start(struct iris_inst *inst, u32 plane)
+{
+	struct iris_inst_hfi_gen2 *inst_hfi_gen2 = to_iris_inst_hfi_gen2(inst);
+	int ret = 0;
+
+	ret = iris_hfi_gen2_subscribe_change_param(inst, plane);
+	if (ret)
+		return ret;
+
+	ret = iris_hfi_gen2_subscribe_property(inst, plane);
+	if (ret)
+		return ret;
+
+	iris_hfi_gen2_packet_session_command(inst,
+					     HFI_CMD_START,
+					     (HFI_HOST_FLAGS_RESPONSE_REQUIRED |
+					     HFI_HOST_FLAGS_INTR_REQUIRED),
+					     iris_hfi_gen2_get_port(inst, plane),
+					     inst->session_id,
+					     HFI_PAYLOAD_NONE,
+					     NULL,
+					     0);
+
+	return iris_hfi_queue_cmd_write(inst->core, inst_hfi_gen2->packet,
+					inst_hfi_gen2->packet->size);
+}
+
+static int iris_hfi_gen2_session_stop(struct iris_inst *inst, u32 plane)
+{
+	struct iris_inst_hfi_gen2 *inst_hfi_gen2 = to_iris_inst_hfi_gen2(inst);
+	int ret = 0;
+
+	if (!inst_hfi_gen2->packet)
+		return -EINVAL;
+
+	reinit_completion(&inst->completion);
+
+	iris_hfi_gen2_packet_session_command(inst,
+					     HFI_CMD_STOP,
+					     (HFI_HOST_FLAGS_RESPONSE_REQUIRED |
+					     HFI_HOST_FLAGS_INTR_REQUIRED |
+					     HFI_HOST_FLAGS_NON_DISCARDABLE),
+					     iris_hfi_gen2_get_port(inst, plane),
+					     inst->session_id,
+					     HFI_PAYLOAD_NONE,
+					     NULL,
+					     0);
+
+	ret = iris_hfi_queue_cmd_write(inst->core, inst_hfi_gen2->packet,
+				       inst_hfi_gen2->packet->size);
+	if (ret)
+		return ret;
+
+	return iris_wait_for_session_response(inst, false);
+}
+
+static int iris_hfi_gen2_session_pause(struct iris_inst *inst, u32 plane)
+{
+	struct iris_inst_hfi_gen2 *inst_hfi_gen2 = to_iris_inst_hfi_gen2(inst);
+
+	iris_hfi_gen2_packet_session_command(inst,
+					     HFI_CMD_PAUSE,
+					     (HFI_HOST_FLAGS_RESPONSE_REQUIRED |
+					     HFI_HOST_FLAGS_INTR_REQUIRED),
+					     iris_hfi_gen2_get_port(inst, plane),
+					     inst->session_id,
+					     HFI_PAYLOAD_NONE,
+					     NULL,
+					     0);
+
+	return iris_hfi_queue_cmd_write(inst->core, inst_hfi_gen2->packet,
+					inst_hfi_gen2->packet->size);
+}
+
+static int iris_hfi_gen2_session_resume_drc(struct iris_inst *inst, u32 plane)
+{
+	struct iris_inst_hfi_gen2 *inst_hfi_gen2 = to_iris_inst_hfi_gen2(inst);
+	u32 payload = HFI_CMD_SETTINGS_CHANGE;
+
+	iris_hfi_gen2_packet_session_command(inst,
+					     HFI_CMD_RESUME,
+					     (HFI_HOST_FLAGS_RESPONSE_REQUIRED |
+					     HFI_HOST_FLAGS_INTR_REQUIRED),
+					     iris_hfi_gen2_get_port(inst, plane),
+					     inst->session_id,
+					     HFI_PAYLOAD_U32,
+					     &payload,
+					     sizeof(u32));
+
+	return iris_hfi_queue_cmd_write(inst->core, inst_hfi_gen2->packet,
+					inst_hfi_gen2->packet->size);
+}
+
+static int iris_hfi_gen2_session_resume_drain(struct iris_inst *inst, u32 plane)
+{
+	struct iris_inst_hfi_gen2 *inst_hfi_gen2 = to_iris_inst_hfi_gen2(inst);
+	u32 payload = HFI_CMD_DRAIN;
+
+	iris_hfi_gen2_packet_session_command(inst,
+					     HFI_CMD_RESUME,
+					     (HFI_HOST_FLAGS_RESPONSE_REQUIRED |
+					     HFI_HOST_FLAGS_INTR_REQUIRED),
+					     iris_hfi_gen2_get_port(inst, plane),
+					     inst->session_id,
+					     HFI_PAYLOAD_U32,
+					     &payload,
+					     sizeof(u32));
+
+	return iris_hfi_queue_cmd_write(inst->core, inst_hfi_gen2->packet,
+					inst_hfi_gen2->packet->size);
+}
+
+static int iris_hfi_gen2_session_drain(struct iris_inst *inst, u32 plane)
+{
+	struct iris_inst_hfi_gen2 *inst_hfi_gen2 = to_iris_inst_hfi_gen2(inst);
+
+	if (!V4L2_TYPE_IS_OUTPUT(plane))
+		return 0;
+
+	iris_hfi_gen2_packet_session_command(inst,
+					     HFI_CMD_DRAIN,
+					     (HFI_HOST_FLAGS_RESPONSE_REQUIRED |
+					     HFI_HOST_FLAGS_INTR_REQUIRED |
+					     HFI_HOST_FLAGS_NON_DISCARDABLE),
+					     iris_hfi_gen2_get_port(inst, plane),
+					     inst->session_id,
+					     HFI_PAYLOAD_NONE,
+					     NULL,
+					     0);
+
+	return iris_hfi_queue_cmd_write(inst->core, inst_hfi_gen2->packet,
+					inst_hfi_gen2->packet->size);
+}
+
+static u32 iris_hfi_gen2_buf_type_from_driver(u32 domain, enum iris_buffer_type buffer_type)
+{
+	switch (buffer_type) {
+	case BUF_INPUT:
+		if (domain == DECODER)
+			return HFI_BUFFER_BITSTREAM;
+		else
+			return HFI_BUFFER_RAW;
+	case BUF_OUTPUT:
+		if (domain == DECODER)
+			return HFI_BUFFER_RAW;
+		else
+			return HFI_BUFFER_BITSTREAM;
+	case BUF_BIN:
+		return HFI_BUFFER_BIN;
+	case BUF_COMV:
+		return HFI_BUFFER_COMV;
+	case BUF_NON_COMV:
+		return HFI_BUFFER_NON_COMV;
+	case BUF_LINE:
+		return HFI_BUFFER_LINE;
+	case BUF_DPB:
+	case BUF_SCRATCH_2:
+		return HFI_BUFFER_DPB;
+	case BUF_PERSIST:
+		return HFI_BUFFER_PERSIST;
+	case BUF_ARP:
+		return HFI_BUFFER_ARP;
+	case BUF_VPSS:
+		return HFI_BUFFER_VPSS;
+	case BUF_PARTIAL:
+		return HFI_BUFFER_PARTIAL_DATA;
+	default:
+		return 0;
+	}
+}
+
+static int iris_hfi_gen2_set_num_comv(struct iris_inst *inst)
+{
+	u32 num_comv = inst->buffers[BUF_OUTPUT].min_count;
+
+	if (inst->fw_min_count)
+		num_comv = inst->fw_min_count;
+
+	return iris_hfi_gen2_session_set_property(inst,
+						  HFI_PROP_COMV_BUFFER_COUNT,
+						  HFI_HOST_FLAGS_NONE,
+						  HFI_PORT_BITSTREAM,
+						  HFI_PAYLOAD_U32,
+						  &num_comv, sizeof(u32));
+}
+
+static void iris_hfi_gen2_get_buffer(u32 domain, struct iris_buffer *buffer,
+				     struct iris_hfi_buffer *buf)
+{
+	memset(buf, 0, sizeof(*buf));
+	buf->type = iris_hfi_gen2_buf_type_from_driver(domain, buffer->type);
+	buf->index = buffer->index;
+	buf->base_address = buffer->device_addr;
+	buf->addr_offset = 0;
+	buf->buffer_size = buffer->buffer_size;
+
+	if (domain == DECODER && buffer->type == BUF_INPUT)
+		buf->buffer_size = ALIGN(buffer->buffer_size, 256);
+	buf->data_offset = buffer->data_offset;
+	buf->data_size = buffer->data_size;
+	if (buffer->attr & BUF_ATTR_PENDING_RELEASE)
+		buf->flags |= HFI_BUF_HOST_FLAG_RELEASE;
+	buf->flags |= HFI_BUF_HOST_FLAGS_CB_NON_SECURE;
+	buf->timestamp = buffer->timestamp;
+}
+
+static int iris_hfi_gen2_session_queue_buffer(struct iris_inst *inst, struct iris_buffer *buffer)
+{
+	struct iris_inst_hfi_gen2 *inst_hfi_gen2 = to_iris_inst_hfi_gen2(inst);
+	struct iris_hfi_buffer hfi_buffer;
+	u32 port;
+	int ret;
+
+	iris_hfi_gen2_get_buffer(inst->domain, buffer, &hfi_buffer);
+	if (buffer->type == BUF_COMV) {
+		ret = iris_hfi_gen2_set_num_comv(inst);
+		if (ret)
+			return ret;
+	}
+
+	port = iris_hfi_gen2_get_port_from_buf_type(inst, buffer->type);
+	iris_hfi_gen2_packet_session_command(inst,
+					     HFI_CMD_BUFFER,
+					     HFI_HOST_FLAGS_INTR_REQUIRED,
+					     port,
+					     inst->session_id,
+					     HFI_PAYLOAD_STRUCTURE,
+					     &hfi_buffer,
+					     sizeof(hfi_buffer));
+
+	return iris_hfi_queue_cmd_write(inst->core, inst_hfi_gen2->packet,
+					inst_hfi_gen2->packet->size);
+}
+
+static int iris_hfi_gen2_session_release_buffer(struct iris_inst *inst, struct iris_buffer *buffer)
+{
+	struct iris_inst_hfi_gen2 *inst_hfi_gen2 = to_iris_inst_hfi_gen2(inst);
+	struct iris_hfi_buffer hfi_buffer;
+	u32 port;
+
+	iris_hfi_gen2_get_buffer(inst->domain, buffer, &hfi_buffer);
+	hfi_buffer.flags |= HFI_BUF_HOST_FLAG_RELEASE;
+	port = iris_hfi_gen2_get_port_from_buf_type(inst, buffer->type);
+
+	iris_hfi_gen2_packet_session_command(inst,
+					     HFI_CMD_BUFFER,
+					     (HFI_HOST_FLAGS_RESPONSE_REQUIRED |
+					     HFI_HOST_FLAGS_INTR_REQUIRED),
+					     port,
+					     inst->session_id,
+					     HFI_PAYLOAD_STRUCTURE,
+					     &hfi_buffer,
+					     sizeof(hfi_buffer));
+
+	return iris_hfi_queue_cmd_write(inst->core, inst_hfi_gen2->packet,
+					inst_hfi_gen2->packet->size);
+}
+
+static const struct iris_hfi_session_ops iris_hfi_gen2_session_ops = {
+	.session_open = iris_hfi_gen2_session_open,
+	.session_set_config_params = iris_hfi_gen2_session_set_config_params,
+	.session_set_property = iris_hfi_gen2_session_set_property,
+	.session_start = iris_hfi_gen2_session_start,
+	.session_queue_buf = iris_hfi_gen2_session_queue_buffer,
+	.session_release_buf = iris_hfi_gen2_session_release_buffer,
+	.session_pause = iris_hfi_gen2_session_pause,
+	.session_resume_drc = iris_hfi_gen2_session_resume_drc,
+	.session_stop = iris_hfi_gen2_session_stop,
+	.session_drain = iris_hfi_gen2_session_drain,
+	.session_resume_drain = iris_hfi_gen2_session_resume_drain,
+	.session_close = iris_hfi_gen2_session_close,
+};
+
+static struct iris_inst *iris_hfi_gen2_get_instance(void)
+{
+	struct iris_inst_hfi_gen2 *out;
+
+	/* The allocation is intentionally larger than struct iris_inst. */
+	out = kzalloc_obj(*out);
+	if (!out)
+		return NULL;
+
+	out->inst.hfi_session_ops = &iris_hfi_gen2_session_ops;
+
+	return &out->inst;
+}
+
+static const struct iris_hfi_sys_ops iris_hfi_gen2_sys_ops = {
+	.sys_init = iris_hfi_gen2_sys_init,
+	.sys_image_version = iris_hfi_gen2_sys_image_version,
+	.sys_interframe_powercollapse = iris_hfi_gen2_sys_interframe_powercollapse,
+	.sys_pc_prep = iris_hfi_gen2_sys_pc_prep,
+
+	.sys_hfi_response_handler = iris_hfi_gen2_response_handler,
+
+	.sys_get_instance = iris_hfi_gen2_get_instance,
+};
+
+void iris_hfi_gen2_sys_ops_init(struct iris_core *core)
+{
+	core->hfi_sys_ops = &iris_hfi_gen2_sys_ops;
+}
