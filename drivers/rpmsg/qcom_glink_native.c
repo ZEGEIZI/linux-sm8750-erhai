@@ -1470,9 +1470,6 @@ static void qcom_glink_destroy_ept(struct rpmsg_endpoint *ept)
 	}
 	spin_unlock_irqrestore(&channel->recv_lock, flags);
 
-	/* Decouple the potential rpdev from the channel */
-	qcom_glink_remove_rpmsg_device(glink, channel);
-
 	qcom_glink_send_close_req(glink, channel);
 }
 

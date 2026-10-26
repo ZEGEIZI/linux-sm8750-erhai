@@ -6,6 +6,7 @@
  * Copyright (C) 2020-2022 Oplus. All rights reserved.
  */
 #include <linux/auxiliary_bus.h>
+#include <linux/devm-helpers.h>
 #include <linux/module.h>
 #include <linux/mutex.h>
 #include <linux/nvmem-consumer.h>
@@ -1997,7 +1998,7 @@ static void qcom_battmgr_sc8280xp_strcpy(char *dest, const char *src)
 		memcpy(dest, src + 1, len);
 		dest[len] = '\0';
 	} else {
-		memcpy(dest, src, BATTMGR_STRING_LEN);
+		strscpy(dest, src, BATTMGR_STRING_LEN);
 	}
 }
 
@@ -2588,134 +2589,5 @@ static int qcom_battmgr_probe(struct auxiliary_device *adev,
 	psy_cfg_supply.supplied_to = qcom_battmgr_battery;
 	psy_cfg_supply.num_supplicants = 1;
 
-	INIT_WORK(&battmgr->enable_work, qcom_battmgr_enable_worker);
 	INIT_DELAYED_WORK(&battmgr->charge_work, qcom_battmgr_charge_worker);
 	INIT_WORK(&battmgr->otg_work, qcom_battmgr_otg_worker);
-	mutex_init(&battmgr->lock);
-	mutex_init(&battmgr->charge_lock);
-	init_completion(&battmgr->ack);
-
-	ret = devm_add_action_or_reset(dev, qcom_battmgr_cancel_work, battmgr);
-	if (ret)
-		return ret;
-
-	match = of_match_device(qcom_battmgr_of_variants, dev->parent);
-	if (match)
-		battmgr->variant = (unsigned long)match->data;
-	else
-		battmgr->variant = QCOM_BATTMGR_SM8350;
-
-	match = of_match_device(qcom_battmgr_of_quirks, dev->parent);
-	if (match)
-		battmgr->quirks = (unsigned long)match->data;
-
-	ret = qcom_battmgr_charge_control_thresholds_init(battmgr);
-	if (ret < 0)
-		return dev_err_probe(dev, ret,
-				     "failed to init battery charge control thresholds\n");
-
-	/* Without a configured end threshold, charge to full */
-	if ((battmgr->quirks & QCOM_BATTMGR_QUIRK_CHARGE_ENABLE) &&
-	    !battmgr->info.charge_ctrl_end)
-		battmgr->info.charge_ctrl_end = CHARGE_CTRL_END_THR_MAX;
-
-	if (battmgr->quirks & QCOM_BATTMGR_QUIRK_PPS) {
-		battmgr->pm_nb.notifier_call = qcom_battmgr_pm_notify;
-		ret = register_pm_notifier(&battmgr->pm_nb);
-		if (ret)
-			return ret;
-
-		ret = devm_add_action_or_reset(dev, qcom_battmgr_unregister_pm_notifier,
-					       battmgr);
-		if (ret)
-			return ret;
-	}
-
-	if (battmgr->variant == QCOM_BATTMGR_SC8280XP ||
-	    battmgr->variant == QCOM_BATTMGR_X1E80100) {
-		if (battmgr->variant == QCOM_BATTMGR_X1E80100)
-			psy_desc = &x1e80100_bat_psy_desc;
-		else
-			psy_desc = &sc8280xp_bat_psy_desc;
-
-		battmgr->bat_psy = devm_power_supply_register(dev, psy_desc, &psy_cfg);
-		if (IS_ERR(battmgr->bat_psy))
-			return dev_err_probe(dev, PTR_ERR(battmgr->bat_psy),
-					     "failed to register battery power supply\n");
-
-		battmgr->ac_psy = devm_power_supply_register(dev, &sc8280xp_ac_psy_desc, &psy_cfg_supply);
-		if (IS_ERR(battmgr->ac_psy))
-			return dev_err_probe(dev, PTR_ERR(battmgr->ac_psy),
-					     "failed to register AC power supply\n");
-
-		battmgr->usb_psy = devm_power_supply_register(dev, &sc8280xp_usb_psy_desc, &psy_cfg_supply);
-		if (IS_ERR(battmgr->usb_psy))
-			return dev_err_probe(dev, PTR_ERR(battmgr->usb_psy),
-					     "failed to register USB power supply\n");
-
-		battmgr->wls_psy = devm_power_supply_register(dev, &sc8280xp_wls_psy_desc, &psy_cfg_supply);
-		if (IS_ERR(battmgr->wls_psy))
-			return dev_err_probe(dev, PTR_ERR(battmgr->wls_psy),
-					     "failed to register wireless charing power supply\n");
-	} else {
-		/*
-		 * The SM8350-class firmware has no BATTMGR_BAT_INFO request, so
-		 * @unit is never populated from the firmware. It reports charge
-		 * domain values, so set it statically here - otherwise the
-		 * CHARGE_* properties are rejected with -ENODATA.
-		 */
-		battmgr->unit = QCOM_BATTMGR_UNIT_mAh;
-
-		if (battmgr->variant == QCOM_BATTMGR_SM8550)
-			psy_desc = &sm8550_bat_psy_desc;
-		else
-			psy_desc = &sm8350_bat_psy_desc;
-
-		psy_desc = qcom_battmgr_sm8350_bat_desc(battmgr, psy_desc);
-		if (!psy_desc)
-			return -ENOMEM;
-
-		battmgr->bat_psy = devm_power_supply_register(dev, psy_desc, &psy_cfg);
-		if (IS_ERR(battmgr->bat_psy))
-			return dev_err_probe(dev, PTR_ERR(battmgr->bat_psy),
-					     "failed to register battery power supply\n");
-
-		battmgr->usb_psy = devm_power_supply_register(dev, &sm8350_usb_psy_desc, &psy_cfg_supply);
-		if (IS_ERR(battmgr->usb_psy))
-			return dev_err_probe(dev, PTR_ERR(battmgr->usb_psy),
-					     "failed to register USB power supply\n");
-
-		battmgr->wls_psy = devm_power_supply_register(dev, &sm8350_wls_psy_desc, &psy_cfg_supply);
-		if (IS_ERR(battmgr->wls_psy))
-			return dev_err_probe(dev, PTR_ERR(battmgr->wls_psy),
-					     "failed to register wireless charing power supply\n");
-	}
-
-	battmgr->client = devm_pmic_glink_client_alloc(dev, PMIC_GLINK_OWNER_BATTMGR,
-						       qcom_battmgr_callback,
-						       qcom_battmgr_pdr_notify,
-						       battmgr);
-	if (IS_ERR(battmgr->client))
-		return PTR_ERR(battmgr->client);
-
-	pmic_glink_client_register(battmgr->client);
-
-	return 0;
-}
-
-static const struct auxiliary_device_id qcom_battmgr_id_table[] = {
-	{ .name = "pmic_glink.power-supply", },
-	{},
-};
-MODULE_DEVICE_TABLE(auxiliary, qcom_battmgr_id_table);
-
-static struct auxiliary_driver qcom_battmgr_driver = {
-	.name = "pmic_glink_power_supply",
-	.probe = qcom_battmgr_probe,
-	.id_table = qcom_battmgr_id_table,
-};
-
-module_auxiliary_driver(qcom_battmgr_driver);
-
-MODULE_DESCRIPTION("Qualcomm PMIC GLINK battery manager driver");
-MODULE_LICENSE("GPL");
