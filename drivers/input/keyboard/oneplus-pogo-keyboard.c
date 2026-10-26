@@ -720,13 +720,13 @@ static int pogo_kb_set_awake(struct pogo_kb *kb, bool awake)
 
 	/*
 	 * Like the vendor's write-and-read exchange, allow the sleeping MCU
-	 * another command after an echoed frame received no acknowledgment.
+	 * another command after an echoed frame received no acknowledgement.
 	 * An echo only confirms the host UART loopback, not that the MCU was
 	 * ready to receive. Keep transport and protocol errors terminal.
 	 */
 	for (attempt = 0; attempt < attempts; attempt++) {
 		ret = pogo_kb_xfer(kb, POGO_KB_CMD_GENERAL, data, sizeof(data), true);
-		if (ret != -ETIMEDOUT || !completion_done(&kb->echo_done))
+		if (ret != -ETIMEDOUT)
 			break;
 	}
 	if (ret)
