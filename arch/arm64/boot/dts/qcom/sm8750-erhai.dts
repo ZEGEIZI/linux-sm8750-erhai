@@ -27,6 +27,16 @@
 		serial0 = &uart7;
 	};
 
+	reserved-memory {
+		ramoops@bfff00000 {
+			compatible = "ramoops";
+			reg = <0xb 0xfff00000 0x0 0x100000>;
+			record-size = <0x20000>;
+			console-size = <0x40000>;
+			pmsg-size = <0x20000>;
+		};
+	};
+
 	/*
 	 * Both KTZ8868 chips light the one panel and always get the same
 	 * brightness value. The initial level is the stock default brightness
