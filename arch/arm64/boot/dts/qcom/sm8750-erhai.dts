@@ -29,6 +29,16 @@
 		serial0 = &uart7;
 	};
 
+	reserved-memory {
+		ramoops@bfff00000 {
+			compatible = "ramoops";
+			reg = <0xb 0xfff00000 0x0 0x100000>;
+			record-size = <0x20000>;
+			console-size = <0x40000>;
+			pmsg-size = <0x20000>;
+		};
+	};
+
 	/*
 	 * Both KTZ8868 chips light the one panel and always get the same
 	 * brightness value. The initial level is the stock default brightness
@@ -43,9 +53,16 @@
 	sound {
 		compatible = "qcom,sm8750-sndcard", "qcom,sm8450-sndcard";
 		model = "OnePlus-Pad-2-Pro";
-		audio-routing = "AMIC1", "MIC BIAS1",
+		audio-routing = "IN1_HPHL", "HPHL_OUT",
+				"IN2_HPHR", "HPHR_OUT",
+				"AMIC1", "MIC BIAS1",
+				"AMIC2", "MIC BIAS2",
+				"AMIC3", "MIC BIAS4",
+				"AMIC4", "MIC BIAS3",
 				"AMIC5", "MIC BIAS3",
 				"TX SWR_INPUT0", "ADC1_OUTPUT",
+				"TX SWR_INPUT1", "ADC2_OUTPUT",
+				"TX SWR_INPUT2", "ADC3_OUTPUT",
 				"TX SWR_INPUT3", "ADC4_OUTPUT";
 
 		pinctrl-0 = <&sec_tdm_active>;
@@ -68,6 +85,22 @@
 			};
 		};
 
+		wcd-playback-dai-link {
+			link-name = "WCD Playback";
+
+			cpu {
+				sound-dai = <&q6apmbedai RX_CODEC_DMA_RX_0>;
+			};
+
+			codec {
+				sound-dai = <&wcd939x 0>, <&swr1 0>, <&lpass_rxmacro 0>;
+			};
+
+			platform {
+				sound-dai = <&q6apm>;
+			};
+		};
+
 		wcd-capture-dai-link {
 			link-name = "WCD Capture";
 
@@ -76,7 +109,7 @@
 			};
 
 			codec {
-				sound-dai = <&wcd939x 1>, <&swr2 0>, <&lpass_txmacro 0>;
+				sound-dai = <&wcd939x 1>, <&swr2 1>, <&lpass_txmacro 0>;
 			};
 
 			platform {
@@ -1929,6 +1962,18 @@
 
 &swr2 {
 	status = "okay";
+
+	/* The TX controller has one output port before its four input ports. */
+	qcom,dout-ports = <1>;
+	qcom,ports-sinterval-low =	/bits/ 8 <0x00 0x01 0x01 0x03 0x03>;
+	qcom,ports-offset1 =		/bits/ 8 <0x00 0x00 0x00 0x01 0x01>;
+	qcom,ports-offset2 =		/bits/ 8 <0x00 0x00 0x00 0x00 0x00>;
+	qcom,ports-hstart =		/bits/ 8 <0xff 0xff 0xff 0xff 0xff>;
+	qcom,ports-hstop =		/bits/ 8 <0xff 0xff 0xff 0xff 0xff>;
+	qcom,ports-word-length =	/bits/ 8 <0xff 0xff 0xff 0xff 0xff>;
+	qcom,ports-block-pack-mode =	/bits/ 8 <0xff 0xff 0xff 0xff 0xff>;
+	qcom,ports-block-group-count =	/bits/ 8 <0xff 0xff 0xff 0xff 0xff>;
+	qcom,ports-lane-control =	/bits/ 8 <0xff 0x01 0x02 0x00 0x00>;
 
 	wcd_tx: codec@0,3 {
 		compatible = "sdw20217010e00";
