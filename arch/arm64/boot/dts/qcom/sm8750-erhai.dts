@@ -1705,6 +1705,10 @@
 	reg = <0x0 0x9ee00000 0x0 0x5080000>;
 };
 
+&remoteproc_soccp {
+	firmware-name = "qcom/sm8750/erhai/soccp.mbn";
+};
+
 &remoteproc_adsp {
 	firmware-name = "qcom/sm8750/erhai/adsp.mdt",
 			"qcom/sm8750/erhai/adsp_dtb.mdt";
@@ -1749,6 +1753,15 @@
 		firmware-name = "novatek/nt36536-xn242.bin";
 		novatek,pen-support;
 	};
+};
+
+/* The external speaker amplifiers use TDM, not the WSA SoundWire paths. */
+&lpass_wsamacro {
+	status = "disabled";
+};
+
+&lpass_wsa2macro {
+	status = "disabled";
 };
 
 &swr1 {
