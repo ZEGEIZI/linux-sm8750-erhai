@@ -1731,6 +1731,10 @@
 	status = "okay";
 };
 
+&gpi_dma2 {
+	status = "okay";
+};
+
 &pm8550_gpios {
 	volume_down_n: volume-down-n-state {
 		pins = "gpio6";
