@@ -833,8 +833,6 @@
 		vddrfa1p2-supply = <&vreg_s7i_1p2>;
 		vddrfa1p8-supply = <&vreg_s3g_1p8>;
 
-		clocks = <&rpmhcc RPMH_RF_CLK1>;
-
 		regulators {
 			vreg_pmu_rfa_cmn: ldo0 {
 				regulator-name = "vreg_pmu_rfa_cmn";
@@ -1429,6 +1427,10 @@
 		vio-supply = <&vreg_l4b_1p8>;
 		vaf-supply = <&vreg_l9b_2p9>;
 	};
+};
+
+&crypto {
+	status = "disabled";
 };
 
 &csiphy0_out {

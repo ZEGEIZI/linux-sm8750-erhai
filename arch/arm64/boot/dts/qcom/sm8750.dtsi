@@ -71,6 +71,7 @@
 			next-level-cache = <&l2_0>;
 			power-domains = <&cpu_pd0>, <&scmi_dvfs 0>;
 			power-domain-names = "psci", "perf";
+			capacity-dmips-mhz = <1792>;
 			#cooling-cells = <2>;
 
 			l2_0: l2-cache {
@@ -88,6 +89,7 @@
 			next-level-cache = <&l2_0>;
 			power-domains = <&cpu_pd1>, <&scmi_dvfs 0>;
 			power-domain-names = "psci", "perf";
+			capacity-dmips-mhz = <1792>;
 			#cooling-cells = <2>;
 		};
 
@@ -99,6 +101,7 @@
 			next-level-cache = <&l2_0>;
 			power-domains = <&cpu_pd2>, <&scmi_dvfs 0>;
 			power-domain-names = "psci", "perf";
+			capacity-dmips-mhz = <1792>;
 			#cooling-cells = <2>;
 		};
 
@@ -110,6 +113,7 @@
 			next-level-cache = <&l2_0>;
 			power-domains = <&cpu_pd3>, <&scmi_dvfs 0>;
 			power-domain-names = "psci", "perf";
+			capacity-dmips-mhz = <1792>;
 			#cooling-cells = <2>;
 		};
 
@@ -121,6 +125,7 @@
 			next-level-cache = <&l2_0>;
 			power-domains = <&cpu_pd4>, <&scmi_dvfs 0>;
 			power-domain-names = "psci", "perf";
+			capacity-dmips-mhz = <1792>;
 			#cooling-cells = <2>;
 		};
 
@@ -132,6 +137,7 @@
 			next-level-cache = <&l2_0>;
 			power-domains = <&cpu_pd5>, <&scmi_dvfs 0>;
 			power-domain-names = "psci", "perf";
+			capacity-dmips-mhz = <1792>;
 			#cooling-cells = <2>;
 		};
 
@@ -143,6 +149,7 @@
 			next-level-cache = <&l2_1>;
 			power-domains = <&cpu_pd6>, <&scmi_dvfs 1>;
 			power-domain-names = "psci", "perf";
+			capacity-dmips-mhz = <1894>;
 			#cooling-cells = <2>;
 
 			l2_1: l2-cache {
@@ -160,6 +167,7 @@
 			next-level-cache = <&l2_1>;
 			power-domains = <&cpu_pd7>, <&scmi_dvfs 1>;
 			power-domain-names = "psci", "perf";
+			capacity-dmips-mhz = <1894>;
 			#cooling-cells = <2>;
 		};
 
