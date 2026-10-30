@@ -6,6 +6,7 @@
  * Copyright (C) 2020-2022 Oplus. All rights reserved.
  */
 #include <linux/auxiliary_bus.h>
+#include <linux/cleanup.h>
 #include <linux/devm-helpers.h>
 #include <linux/module.h>
 #include <linux/mutex.h>
@@ -16,6 +17,7 @@
 #include <linux/soc/qcom/pdr.h>
 #include <linux/soc/qcom/pmic_glink.h>
 #include <linux/math.h>
+#include <linux/spinlock.h>
 #include <linux/suspend.h>
 #include <linux/units.h>
 #include <linux/workqueue.h>
@@ -471,6 +473,10 @@ struct qcom_battmgr {
 	 * firmware, as it then stops responding.
 	 */
 	struct mutex lock;
+
+	/* Serialize teardown against notification and PDR callbacks. */
+	spinlock_t notify_lock;
+	bool removing;
 
 	/* Property id and value in the answer to the last accepted request */
 	u32 resp_property;
@@ -2376,13 +2382,16 @@ static void qcom_battmgr_callback(const void *data, size_t len, void *priv)
 	struct qcom_battmgr *battmgr = priv;
 	unsigned int opcode = le32_to_cpu(hdr->opcode);
 
-	if (opcode == BATTMGR_NOTIFICATION)
-		qcom_battmgr_notification(battmgr, data, len);
-	else if (battmgr->variant == QCOM_BATTMGR_SC8280XP ||
-		 battmgr->variant == QCOM_BATTMGR_X1E80100)
+	if (opcode == BATTMGR_NOTIFICATION) {
+		guard(spinlock_irqsave)(&battmgr->notify_lock);
+		if (!battmgr->removing)
+			qcom_battmgr_notification(battmgr, data, len);
+	} else if (battmgr->variant == QCOM_BATTMGR_SC8280XP ||
+		   battmgr->variant == QCOM_BATTMGR_X1E80100) {
 		qcom_battmgr_sc8280xp_callback(battmgr, data, len);
-	else
+	} else {
 		qcom_battmgr_sm8350_callback(battmgr, data, len);
+	}
 }
 
 /*
@@ -2463,6 +2472,10 @@ static void qcom_battmgr_enable_worker(struct work_struct *work)
 static void qcom_battmgr_pdr_notify(void *priv, int state)
 {
 	struct qcom_battmgr *battmgr = priv;
+
+	guard(spinlock_irqsave)(&battmgr->notify_lock);
+	if (battmgr->removing)
+		return;
 
 	if (state == SERVREG_SERVICE_STATE_UP) {
 		battmgr->service_up = true;
@@ -2552,6 +2565,14 @@ qcom_battmgr_sm8350_bat_desc(struct qcom_battmgr *battmgr,
 
 static char *qcom_battmgr_battery[] = { "battery" };
 
+static void qcom_battmgr_stop_notifications(void *data)
+{
+	struct qcom_battmgr *battmgr = data;
+
+	guard(spinlock_irqsave)(&battmgr->notify_lock);
+	battmgr->removing = true;
+}
+
 static void qcom_battmgr_cancel_work(void *data)
 {
 	struct qcom_battmgr *battmgr = data;
@@ -2595,8 +2616,17 @@ static int qcom_battmgr_probe(struct auxiliary_device *adev,
 	INIT_DELAYED_WORK(&battmgr->charge_work, qcom_battmgr_charge_worker);
 	INIT_WORK(&battmgr->otg_work, qcom_battmgr_otg_worker);
 	mutex_init(&battmgr->lock);
+	spin_lock_init(&battmgr->notify_lock);
 	mutex_init(&battmgr->charge_lock);
 	init_completion(&battmgr->ack);
+
+	/* The client must outlive all supplies, work and their request waiters. */
+	battmgr->client = devm_pmic_glink_client_alloc(dev, PMIC_GLINK_OWNER_BATTMGR,
+						       qcom_battmgr_callback,
+						       qcom_battmgr_pdr_notify,
+						       battmgr);
+	if (IS_ERR(battmgr->client))
+		return PTR_ERR(battmgr->client);
 
 	ret = devm_add_action_or_reset(dev, qcom_battmgr_cancel_work, battmgr);
 	if (ret)
@@ -2699,12 +2729,10 @@ static int qcom_battmgr_probe(struct auxiliary_device *adev,
 	if (ret)
 		return ret;
 
-	battmgr->client = devm_pmic_glink_client_alloc(dev, PMIC_GLINK_OWNER_BATTMGR,
-						       qcom_battmgr_callback,
-						       qcom_battmgr_pdr_notify,
-						       battmgr);
-	if (IS_ERR(battmgr->client))
-		return PTR_ERR(battmgr->client);
+	/* Stop callbacks before any supplies or work are released. */
+	ret = devm_add_action_or_reset(dev, qcom_battmgr_stop_notifications, battmgr);
+	if (ret)
+		return ret;
 
 	pmic_glink_client_register(battmgr->client);
 
