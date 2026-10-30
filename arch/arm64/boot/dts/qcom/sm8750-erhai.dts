@@ -277,6 +277,7 @@
 	};
 
 	pmic-glink {
+		charge-pumps = <&pps_cp_primary>, <&pps_cp_secondary>;
 		compatible = "oneplus,pad2pro-pmic-glink",
 			     "qcom,sm8750-pmic-glink",
 			     "qcom,sm8550-pmic-glink",
@@ -1597,6 +1598,21 @@
 	};
 };
 
+&i2c_hub_2 {
+	clock-frequency = <400000>;
+	status = "okay";
+
+	pps_cp_secondary: charger@6f {
+		compatible = "southchip,sc8547a";
+		reg = <0x6f>;
+		southchip,secondary;
+		southchip,battery-overvoltage-microvolt = <4850000>;
+		southchip,ac-overvoltage-microvolt = <12000000>;
+		southchip,input-overvoltage-microvolt = <10000000>;
+		southchip,input-overcurrent-microamp = <4500000>;
+	};
+};
+
 &i2c_hub_4 {
 	clock-frequency = <400000>;
 	status = "okay";
@@ -1629,6 +1645,24 @@
 		firmware-name = "awinic/erhai/aw88261_acf.bin";
 		sound-name-prefix = "Amp5";
 		awinic,audio-channel = <5>;
+	};
+};
+
+&i2c_hub_8 {
+	clock-frequency = <400000>;
+	status = "okay";
+
+	pps_cp_primary: charger@6f {
+		compatible = "southchip,sc8547a";
+		reg = <0x6f>;
+		interrupt-parent = <&tlmm>;
+		interrupts = <163 IRQ_TYPE_EDGE_FALLING>;
+		pinctrl-names = "default";
+		pinctrl-0 = <&pps_cp_irq_default>;
+		southchip,battery-overvoltage-microvolt = <4850000>;
+		southchip,ac-overvoltage-microvolt = <12000000>;
+		southchip,input-overvoltage-microvolt = <10000000>;
+		southchip,input-overcurrent-microamp = <4500000>;
 	};
 };
 
@@ -2004,6 +2038,14 @@
 &tlmm {
 	/* reserved for secure world */
 	gpio-reserved-ranges = <36 4>, <74 1>;
+
+	pps_cp_irq_default: pps-cp-irq-default-state {
+		pins = "gpio163";
+		function = "gpio";
+		bias-pull-up;
+		drive-strength = <2>;
+		input-enable;
+	};
 
 	qupv3_se4_spi: qupv3-se4-spi-state {
 		miso-pins {
