@@ -1402,7 +1402,7 @@
 		reg = <0x36>;
 		clocks = <&cambistmclkcc CAM_BIST_MCLK_CC_MCLK1_CLK>;
 		assigned-clocks = <&cambistmclkcc CAM_BIST_MCLK_CC_MCLK1_CLK>;
-		assigned-clock-rates = <19200000>;
+		assigned-clock-rates = <24000000>;
 		pinctrl-names = "default";
 		pinctrl-0 = <&cam1_default &camera_rear_reset_default>;
 		reset-gpios = <&pm8550ve_gpios 5 GPIO_ACTIVE_LOW>;
@@ -1483,7 +1483,7 @@
 		reg = <0x10>;
 		clocks = <&cambistmclkcc CAM_BIST_MCLK_CC_MCLK4_CLK>;
 		assigned-clocks = <&cambistmclkcc CAM_BIST_MCLK_CC_MCLK4_CLK>;
-		assigned-clock-rates = <19200000>;
+		assigned-clock-rates = <24000000>;
 		pinctrl-names = "default";
 		pinctrl-0 = <&cam4_default &camera_front_reset_default>;
 		reset-gpios = <&tlmm 7 GPIO_ACTIVE_LOW>;
