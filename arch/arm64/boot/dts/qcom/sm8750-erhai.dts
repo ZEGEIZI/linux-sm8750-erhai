@@ -1411,7 +1411,7 @@
 		dovdd-supply = <&vreg_l4b_1p8>;
 		lens-focus = <&rear_lens>;
 		orientation = <1>;
-		rotation = <0>;
+		rotation = <180>;
 
 		port {
 			rear_camera_out: endpoint {
@@ -1491,7 +1491,7 @@
 		dvdd-supply = <&vreg_l11b_1p0>;
 		dovdd-supply = <&vreg_l4b_1p8>;
 		orientation = <0>;
-		rotation = <0>;
+		rotation = <180>;
 
 		port {
 			front_camera_out: endpoint {
