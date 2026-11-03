@@ -277,7 +277,6 @@
 	};
 
 	pmic-glink {
-		charge-pumps = <&pps_cp_primary>, <&pps_cp_secondary>;
 		compatible = "oneplus,pad2pro-pmic-glink",
 			     "qcom,sm8750-pmic-glink",
 			     "qcom,sm8550-pmic-glink",
@@ -1600,7 +1599,6 @@
 
 &i2c_hub_2 {
 	clock-frequency = <400000>;
-	clock-frequency = <400000>;
 	status = "okay";
 
 	pps_cp_secondary: charger@6f {
@@ -1680,7 +1678,6 @@
 };
 
 &i2c_hub_8 {
-	clock-frequency = <400000>;
 	clock-frequency = <400000>;
 	status = "okay";
 
