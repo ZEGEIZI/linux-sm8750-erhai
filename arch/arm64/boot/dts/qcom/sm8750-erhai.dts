@@ -31,9 +31,9 @@
 	};
 
 	reserved-memory {
-		ramoops@bfff00000 {
+		ramoops@afff00000 {
 			compatible = "ramoops";
-			reg = <0xb 0xfff00000 0x0 0x100000>;
+			reg = <0xa 0xfff00000 0x0 0x100000>;
 			record-size = <0x20000>;
 			console-size = <0x40000>;
 			pmsg-size = <0x20000>;
