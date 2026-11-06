@@ -208,8 +208,8 @@
 		qcom,tx-device = <&wcd_tx>;
 	};
 
+	/* Filled in by the bootloader, which needs the node to exist. */
 	chosen {
-		stdout-path = "serial0:115200n8";
 	};
 
 	clocks {
