@@ -46,4 +46,3 @@ example:
 	memory-region = <&trust_ui_vm_mem &oem_vm_mem>;
 	memory-region-names = "trustedvm_cma" , "oemvm_cma";
     };
-
