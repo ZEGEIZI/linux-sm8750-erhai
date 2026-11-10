@@ -1363,6 +1363,16 @@ static inline void ath12k_core_create_firmware_path(struct ath12k_base *ab,
 {
 	const char *fw_name = NULL;
 
+	/* OPD2413 has its own OEM BDF even when QMI reports board ID 0xff.
+	 * Keep every request, including board API fallbacks, in its namespace.
+	 */
+	if (of_machine_is_compatible("oneplus,opd2413") &&
+	    ab->hw_rev == ATH12K_HW_WCN7860_HW20) {
+		snprintf(buf, buf_len, "%s/%s/oneplus/opd2413/%s",
+			 ATH12K_FW_DIR, ab->hw_params->fw.dir, filename);
+		return;
+	}
+
 	of_property_read_string(ab->dev->of_node, "firmware-name", &fw_name);
 
 	if (fw_name && strncmp(filename, "board", 5))

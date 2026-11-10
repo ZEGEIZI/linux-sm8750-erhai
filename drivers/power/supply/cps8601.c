@@ -722,14 +722,19 @@ static void cps8601_fw_update_check(struct cps8601 *chip)
 	 * firmware usermode helper can lose the race */
 	for (tries = 0; tries < CPS8601_FW_RETRIES; tries++) {
 		release_firmware(fw);
-		ret = request_firmware(&fw, path, chip->dev);
+		ret = firmware_request_nowarn(&fw, path, chip->dev);
 		if (!ret)
 			break;
 		fw = NULL;
 	}
 	if (ret) {
-		dev_info(chip->dev,
-			 "%s missing, keeping factory firmware\n", path);
+		if (ret == -ENOENT)
+			dev_info(chip->dev,
+				 "%s optional; using factory firmware\n", path);
+		else
+			dev_warn(chip->dev,
+				 "%s request failed (%d), keeping current firmware\n",
+				 path, ret);
 		return;
 	}
 
@@ -1322,3 +1327,4 @@ module_i2c_driver(cps8601_driver);
 MODULE_AUTHOR("erhai mainline port");
 MODULE_DESCRIPTION("CPS8601 wireless pen charger driver");
 MODULE_LICENSE("GPL v2");
+MODULE_VERSION("nixos-optional-fw1");
