@@ -16,6 +16,7 @@
  */
 
 #include <linux/kernel.h>
+#include <linux/firmware.h>
 #include <linux/clk.h>
 #include <linux/completion.h>
 #include <linux/debugfs.h>
@@ -39,6 +40,7 @@
 
 #include "hci_uart.h"
 #include "btqca.h"
+#include "brahma_peripheral.h"
 
 /* HCI_IBS protocol messages */
 #define HCI_IBS_SLEEP_IND	0xFE
@@ -80,6 +82,7 @@ enum qca_flags {
 	QCA_BT_OFF,
 	QCA_ROM_FW,
 	QCA_DEBUGFS_CREATED,
+	QCA_PERIPHERAL_ACTIVE,
 };
 
 enum qca_capabilities {
@@ -142,6 +145,8 @@ struct qca_data {
 	struct sk_buff *rx_skb;
 	struct sk_buff_head txq;
 	struct sk_buff_head tx_wait_q;	/* HCI_IBS wait queue	*/
+	struct sk_buff_head peripheral_rxq;
+	wait_queue_head_t peripheral_wait;
 	struct sk_buff_head rx_memdump_q;	/* Memdump wait queue	*/
 	spinlock_t hci_ibs_lock;	/* HCI_IBS state lock	*/
 	u8 tx_ibs_state;	/* HCI_IBS transmit side power state*/
@@ -168,6 +173,8 @@ struct qca_data {
 
 	u16 fw_version;
 	u16 controller_id;
+	unsigned int brahma_trace_events;
+	unsigned int brahma_trace_rx_chunks;
 	/* For debugging purpose */
 	u64 ibs_sent_wacks;
 	u64 ibs_sent_slps;
@@ -588,6 +595,8 @@ static int qca_open(struct hci_uart *hu)
 
 	skb_queue_head_init(&qca->txq);
 	skb_queue_head_init(&qca->tx_wait_q);
+	skb_queue_head_init(&qca->peripheral_rxq);
+	init_waitqueue_head(&qca->peripheral_wait);
 	skb_queue_head_init(&qca->rx_memdump_q);
 	spin_lock_init(&qca->hci_ibs_lock);
 	mutex_init(&qca->hci_memdump_lock);
@@ -728,6 +737,7 @@ static int qca_close(struct hci_uart *hu)
 
 	skb_queue_purge(&qca->tx_wait_q);
 	skb_queue_purge(&qca->txq);
+	skb_queue_purge(&qca->peripheral_rxq);
 	skb_queue_purge(&qca->rx_memdump_q);
 	/*
 	 * Shut the timers down so they can't be rearmed when
@@ -984,11 +994,31 @@ static int qca_ibs_wake_ind(struct hci_dev *hdev, struct sk_buff *skb)
 	return 0;
 }
 
+/* Peripheral events have their own H4 type and must not enter HCI core. */
+static int qca_peripheral_recv(struct hci_dev *hdev, struct sk_buff *skb)
+{
+	struct hci_uart *hu = hci_get_drvdata(hdev);
+	struct qca_data *qca = hu->priv;
+
+	if (qca_soc_type(hu) != QCA_BRAHMA_2_0 ||
+	    !test_bit(QCA_PERIPHERAL_ACTIVE, &qca->flags) ||
+	    skb_queue_len(&qca->peripheral_rxq) >= 32) {
+		kfree_skb(skb);
+		return 0;
+	}
+	skb_queue_tail(&qca->peripheral_rxq, skb);
+	wake_up(&qca->peripheral_wait);
+	return 0;
+}
+
 static int qca_ibs_wake_ack(struct hci_dev *hdev, struct sk_buff *skb)
 {
 	struct hci_uart *hu = hci_get_drvdata(hdev);
 
 	BT_DBG("hu %p recv hci ibs cmd 0x%x", hu, HCI_IBS_WAKE_ACK);
+
+	if (test_bit(QCA_PERIPHERAL_ACTIVE, &((struct qca_data *)hu->priv)->flags))
+		return qca_peripheral_recv(hdev, skb);
 
 	device_woke_up(hu);
 
@@ -1209,10 +1239,30 @@ static int qca_controller_memdump_event(struct hci_dev *hdev,
 	return 0;
 }
 
+/* Bounded bring-up records; never dump standard HCI command payloads. */
+static void qca_brahma_trace_event(struct hci_dev *hdev, struct qca_data *qca,
+				   const u8 *data, size_t size)
+{
+	u16 opcode = 0;
+
+	if (size < 2 || size != (size_t)data[1] + 2 || qca->brahma_trace_events >= 16)
+		return;
+	qca->brahma_trace_events++;
+	if (data[0] == HCI_EV_CMD_COMPLETE && size >= 5)
+		opcode = data[3] | ((u16)data[4] << 8);
+	if ((opcode == 0xfc00 || opcode == 0xfc48) && size >= 8)
+		bt_dev_info(hdev, "BRAHMA_EVENT index=%u evt=%02x len=%zu opcode=%04x ncmd=%u vendor_head=%02x,%02x,%02x", qca->brahma_trace_events, data[0], size, opcode, data[2], data[5], data[6], data[7]);
+	else
+		bt_dev_info(hdev, "BRAHMA_EVENT index=%u evt=%02x len=%zu opcode=%04x", qca->brahma_trace_events, data[0], size, opcode);
+}
+
 static int qca_recv_event(struct hci_dev *hdev, struct sk_buff *skb)
 {
 	struct hci_uart *hu = hci_get_drvdata(hdev);
 	struct qca_data *qca = hu->priv;
+
+	if (qca_soc_type(hu) == QCA_BRAHMA_2_0)
+		qca_brahma_trace_event(hdev, qca, skb->data, skb->len);
 
 	if (test_bit(QCA_DROP_VENDOR_EVENT, &qca->flags)) {
 		struct hci_event_hdr *hdr = (void *)skb->data;
@@ -1268,6 +1318,8 @@ static int qca_recv_event(struct hci_dev *hdev, struct sk_buff *skb)
 	.maxlen = HCI_MAX_IBS_SIZE
 
 static const struct h4_recv_pkt qca_recv_pkts[] = {
+	{ .type = 0x34, .hlen = 3, .loff = 2, .lsize = 1,
+	  .maxlen = 258, .recv = qca_peripheral_recv },
 	{ H4_RECV_ACL,             .recv = qca_recv_acl_data },
 	{ H4_RECV_SCO,             .recv = hci_recv_frame    },
 	{ H4_RECV_EVENT,           .recv = qca_recv_event    },
@@ -1283,6 +1335,13 @@ static int qca_recv(struct hci_uart *hu, const void *data, int count)
 
 	if (!test_bit(HCI_UART_REGISTERED, &hu->flags))
 		return -EUNATCH;
+
+	if (qca_soc_type(hu) == QCA_BRAHMA_2_0 &&
+	    test_bit(QCA_IBS_DISABLED, &qca->flags) && count > 0 &&
+	    qca->brahma_trace_rx_chunks < 8) {
+		qca->brahma_trace_rx_chunks++;
+		bt_dev_info(hu->hdev, "BRAHMA_RX_CHUNK index=%u bytes=%d", qca->brahma_trace_rx_chunks, count);
+	}
 
 	qca->rx_skb = h4_recv_buf(hu, qca->rx_skb, data, count,
 				  qca_recv_pkts, ARRAY_SIZE(qca_recv_pkts));
@@ -1334,6 +1393,8 @@ static uint8_t qca_get_baudrate_value(int speed)
 		return QCA_BAUDRATE_3200000;
 	case 3500000:
 		return QCA_BAUDRATE_3500000;
+	case 8000000:
+		return QCA_BAUDRATE_8000000;
 	default:
 		return QCA_BAUDRATE_115200;
 	}
@@ -1346,7 +1407,9 @@ static int qca_set_baudrate(struct hci_dev *hdev, uint8_t baudrate)
 	struct sk_buff *skb;
 	u8 cmd[] = { 0x01, 0x48, 0xFC, 0x01, 0x00 };
 
-	if (baudrate > QCA_BAUDRATE_3200000)
+	if (baudrate > QCA_BAUDRATE_3200000 &&
+	    !(qca_soc_type(hu) == QCA_BRAHMA_2_0 &&
+	      baudrate == QCA_BAUDRATE_8000000))
 		return -EINVAL;
 
 	cmd[4] = baudrate;
@@ -1385,6 +1448,11 @@ static int qca_set_baudrate(struct hci_dev *hdev, uint8_t baudrate)
 	case QCA_WCN7850:
 	case QCA_WCN7860:
 		usleep_range(1000, 10000);
+		break;
+	case QCA_BRAHMA_2_0:
+		bt_dev_info(hdev,
+			    "BRAHMA_BAUD_SETTLE min_us=20000 max_us=21000");
+		usleep_range(20000, 21000);
 		break;
 
 	default:
@@ -1493,6 +1561,11 @@ static unsigned int qca_get_speed(struct hci_uart *hu,
 static int qca_check_speeds(struct hci_uart *hu)
 {
 	switch (qca_soc_type(hu)) {
+	case QCA_BRAHMA_2_0:
+		if (!hu->serdev || qca_get_speed(hu, QCA_INIT_SPEED) != 115200 ||
+		    qca_get_speed(hu, QCA_OPER_SPEED) != 8000000)
+			return -EINVAL;
+		break;
 	case QCA_WCN3950:
 	case QCA_WCN3988:
 	case QCA_WCN3990:
@@ -1518,14 +1591,22 @@ static int qca_check_speeds(struct hci_uart *hu)
 
 static int qca_set_speed(struct hci_uart *hu, enum qca_speed_type speed_type)
 {
-	unsigned int speed, qca_baudrate;
+	unsigned int speed, qca_baudrate, actual_speed;
 	struct qca_data *qca = hu->priv;
 	int ret = 0;
 
 	if (speed_type == QCA_INIT_SPEED) {
 		speed = qca_get_speed(hu, QCA_INIT_SPEED);
-		if (speed)
-			host_set_baudrate(hu, speed);
+		if (speed) {
+			if (qca_soc_type(hu) == QCA_BRAHMA_2_0) {
+				actual_speed = serdev_device_set_baudrate(hu->serdev, speed);
+				bt_dev_info(hu->hdev, "BRAHMA_BAUD phase=init requested=%u selected=%u", speed, actual_speed);
+				if (actual_speed != speed)
+					return -ERANGE;
+			} else {
+				host_set_baudrate(hu, speed);
+			}
+		}
 	} else {
 		enum qca_btsoc_type soc_type = qca_soc_type(hu);
 
@@ -1546,6 +1627,7 @@ static int qca_set_speed(struct hci_uart *hu, enum qca_speed_type speed_type)
 		case QCA_WCN6855:
 		case QCA_WCN7850:
 		case QCA_WCN7860:
+		case QCA_BRAHMA_2_0:
 			hci_uart_set_flow_control(hu, true);
 			break;
 
@@ -1569,7 +1651,14 @@ static int qca_set_speed(struct hci_uart *hu, enum qca_speed_type speed_type)
 		if (ret)
 			goto error;
 
-		host_set_baudrate(hu, speed);
+		if (soc_type == QCA_BRAHMA_2_0) {
+			actual_speed = serdev_device_set_baudrate(hu->serdev, speed);
+			bt_dev_info(hu->hdev, "BRAHMA_BAUD phase=oper requested=%u selected=%u", speed, actual_speed);
+			if (actual_speed != speed)
+				ret = -ERANGE;
+		} else {
+			host_set_baudrate(hu, speed);
+		}
 
 error:
 		switch (soc_type) {
@@ -1582,6 +1671,7 @@ error:
 		case QCA_WCN6855:
 		case QCA_WCN7850:
 		case QCA_WCN7860:
+		case QCA_BRAHMA_2_0:
 			hci_uart_set_flow_control(hu, false);
 			break;
 
@@ -1854,7 +1944,9 @@ static int qca_regulator_init(struct hci_uart *hu)
 		}
 	}
 
-	qca_set_speed(hu, QCA_INIT_SPEED);
+	ret = qca_set_speed(hu, QCA_INIT_SPEED);
+	if (soc_type == QCA_BRAHMA_2_0 && ret)
+		return ret;
 
 	switch (soc_type) {
 	case QCA_WCN3950:
@@ -1871,7 +1963,10 @@ static int qca_regulator_init(struct hci_uart *hu)
 		break;
 	}
 
-	return qca_port_reopen(hu);
+	ret = qca_port_reopen(hu);
+	if (!ret && soc_type == QCA_BRAHMA_2_0)
+		ret = qca_set_speed(hu, QCA_INIT_SPEED);
+	return ret;
 }
 
 static int qca_power_on(struct hci_dev *hdev)
@@ -1899,6 +1994,7 @@ static int qca_power_on(struct hci_dev *hdev)
 	case QCA_WCN6855:
 	case QCA_WCN7850:
 	case QCA_WCN7860:
+	case QCA_BRAHMA_2_0:
 		ret = qca_regulator_init(hu);
 		break;
 
@@ -1941,6 +2037,124 @@ static int qca_configure_hfp_offload(struct hci_dev *hdev)
 	 */
 	hdev->get_codec_config_data = NULL;
 	return 0;
+}
+
+static int qca_peripheral_send(void *context, const u8 *data, size_t size)
+{
+	struct hci_uart *hu = context;
+	struct qca_data *qca = hu->priv;
+	struct sk_buff *skb;
+	unsigned long deadline = jiffies + msecs_to_jiffies(2000);
+	int ret;
+
+	if (!size || size > 260)
+		return -EINVAL;
+	skb = bt_skb_alloc(size, GFP_KERNEL);
+	if (!skb)
+		return -ENOMEM;
+	hci_skb_pkt_type(skb) = data[0];
+	skb_put_data(skb, data, size);
+	skb_queue_tail(&qca->txq, skb);
+	hci_uart_tx_wakeup(hu);
+	ret = hci_uart_wait_until_sent(hu);
+	if (ret)
+		return ret;
+	/* Bound admission and wire backlog for every peripheral segment. */
+	while (!skb_queue_empty(&qca->txq) || READ_ONCE(hu->tx_skb)) {
+		if (time_after_eq(jiffies, deadline))
+			return -ETIMEDOUT;
+		usleep_range(100, 200);
+	}
+	serdev_device_wait_until_sent(hu->serdev, msecs_to_jiffies(2000));
+	return 0;
+}
+
+static int qca_peripheral_receive(void *context, u8 *data, size_t capacity)
+{
+	struct hci_uart *hu = context;
+	struct qca_data *qca = hu->priv;
+	struct sk_buff *skb;
+	long ret;
+	int size;
+
+	ret = wait_event_timeout(qca->peripheral_wait,
+			!skb_queue_empty(&qca->peripheral_rxq), msecs_to_jiffies(3000));
+	if (!ret)
+		return -ETIMEDOUT;
+	skb = skb_dequeue(&qca->peripheral_rxq);
+	if (!skb)
+		return -EIO;
+	size = skb->len + 1;
+	if (size > capacity) {
+		kfree_skb(skb);
+		return -EMSGSIZE;
+	}
+	data[0] = hci_skb_pkt_type(skb);
+	memcpy(data + 1, skb->data, skb->len);
+	kfree_skb(skb);
+	return size;
+}
+
+static int qca_peripheral_baud(void *context)
+{
+	struct hci_uart *hu = context;
+	unsigned int selected;
+
+	usleep_range(20000, 21000);
+	selected = serdev_device_set_baudrate(hu->serdev, 8000000);
+	bt_dev_info(hu->hdev, "BRAHMA_PERIPHERAL_BAUD selected=%u", selected);
+	return selected == 8000000 ? 0 : -ERANGE;
+}
+
+static void qca_peripheral_flow(void *context, bool off)
+{
+	hci_uart_set_flow_control(context, off);
+}
+
+static void qca_peripheral_stage(void *context, const char *stage)
+{
+	struct hci_uart *hu = context;
+
+	bt_dev_info(hu->hdev, "BRAHMA_PERIPHERAL_STAGE %s", stage);
+}
+
+static int qca_peripheral_bootstrap(struct hci_uart *hu)
+{
+	static const char * const names[] = {
+		"qca/oneplus/opd2413/brhperifw20.mbn",
+		"qca/oneplus/opd2413/brhperinv20.bin",
+		"qca/oneplus/opd2413/tmel_peach_20.elf",
+	};
+	const struct firmware *fw[3] = {};
+	struct brahma_image images[3];
+	struct qca_data *qca = hu->priv;
+	struct brahma_io io = {
+		.context = hu, .send = qca_peripheral_send,
+		.receive = qca_peripheral_receive, .baud = qca_peripheral_baud,
+		.flow = qca_peripheral_flow, .stage = qca_peripheral_stage,
+	};
+	unsigned int i;
+	int ret;
+
+	for (i = 0; i < ARRAY_SIZE(fw); i++) {
+		ret = request_firmware(&fw[i], names[i], &hu->hdev->dev);
+		if (ret)
+			goto out;
+		images[i].data = fw[i]->data;
+		images[i].size = fw[i]->size;
+	}
+	skb_queue_purge(&qca->peripheral_rxq);
+	set_bit(QCA_PERIPHERAL_ACTIVE, &qca->flags);
+	ret = brahma_peripheral_boot(&io, &images[0], &images[1], &images[2]);
+	if (!ret)
+		msleep(200); /* OEM handoff interval before the first Bluetooth command. */
+	clear_bit(QCA_PERIPHERAL_ACTIVE, &qca->flags);
+	/* Late frames remain owned until the next setup or close. */
+	bt_dev_info(hu->hdev, "BRAHMA_PERIPHERAL_RESULT ret=%d", ret);
+ out:
+	for (i = 0; i < ARRAY_SIZE(fw); i++)
+		release_firmware(fw[i]);
+	return ret;
 }
 
 static int qca_setup(struct hci_uart *hu)
@@ -2002,6 +2216,10 @@ static int qca_setup(struct hci_uart *hu)
 		soc_name = "wcn7860";
 		break;
 
+	case QCA_BRAHMA_2_0:
+		soc_name = "Brahma 2.0 (OPD2413)";
+		break;
+
 	default:
 		soc_name = "ROME/QCA6390";
 	}
@@ -2017,6 +2235,19 @@ retry:
 	clear_bit(QCA_SSR_TRIGGERED, &qca->flags);
 
 	switch (soc_type) {
+	case QCA_BRAHMA_2_0:
+		ret = qca_peripheral_bootstrap(hu);
+		if (ret)
+			goto out;
+		ret = qca_read_soc_version(hdev, &ver, soc_type);
+		if (ret)
+			goto out;
+		if (!qca_brahma20_version_valid(ver)) {
+			bt_dev_err(hdev, "Unexpected Brahma ROM identity");
+			ret = -ENODEV;
+			goto out;
+		}
+		break;
 	case QCA_WCN3950:
 	case QCA_WCN3988:
 	case QCA_WCN3990:
@@ -2048,7 +2279,7 @@ retry:
 
 	/* Setup user speed if needed */
 	speed = qca_get_speed(hu, QCA_OPER_SPEED);
-	if (speed) {
+	if (speed && soc_type != QCA_BRAHMA_2_0) {
 		ret = qca_set_speed(hu, QCA_OPER_SPEED);
 		if (ret)
 			goto out;
@@ -2066,6 +2297,7 @@ retry:
 	case QCA_WCN6855:
 	case QCA_WCN7850:
 	case QCA_WCN7860:
+	case QCA_BRAHMA_2_0:
 		break;
 
 	default:
@@ -2074,6 +2306,12 @@ retry:
 		if (ret)
 			goto out;
 	}
+
+	if (soc_type == QCA_BRAHMA_2_0)
+		bt_dev_info(hdev, "BRAHMA_OEM_DIRECT_DOWNLOAD baud=%u", speed);
+
+	if (soc_type == QCA_BRAHMA_2_0)
+		qca_baudrate = QCA_BAUDRATE_8000000;
 
 	/* Setup patch / NVM configurations */
 	ret = qca_uart_setup(hdev, qca_baudrate, soc_type, ver,
@@ -2087,11 +2325,11 @@ retry:
 			if (device_can_wakeup(hu->serdev->ctrl->dev.parent))
 				hu->hdev->wakeup = qca_wakeup;
 		}
-	} else if (ret == -ENOENT) {
+	} else if (ret == -ENOENT && soc_type != QCA_BRAHMA_2_0) {
 		/* No patch/nvm-config found, run with original fw/config */
 		set_bit(QCA_ROM_FW, &qca->flags);
 		ret = 0;
-	} else if (ret == -EAGAIN) {
+	} else if (ret == -EAGAIN && soc_type != QCA_BRAHMA_2_0) {
 		/*
 		 * Userspace firmware loader will return -EAGAIN in case no
 		 * patch/nvm-config is found, so run with original fw/config.
@@ -2102,9 +2340,11 @@ retry:
 
 out:
 	if (ret) {
+		if (soc_type == QCA_BRAHMA_2_0 && hu->serdev)
+			bt_dev_info(hdev, "BRAHMA_FAILURE ret=%d modem=%d byte_tx=%u byte_rx=%u cmd_tx=%u evt_rx=%u tx_queue=%u wait_queue=%u", ret, serdev_device_get_tiocm(hu->serdev), hdev->stat.byte_tx, hdev->stat.byte_rx, hdev->stat.cmd_tx, hdev->stat.evt_rx, skb_queue_len(&qca->txq), skb_queue_len(&qca->tx_wait_q));
 		qca_power_off(hu);
 
-		if (retries < MAX_INIT_RETRIES) {
+		if (soc_type != QCA_BRAHMA_2_0 && retries < MAX_INIT_RETRIES) {
 			bt_dev_warn(hdev, "Retry BT power ON:%d", retries);
 			if (hu->serdev) {
 				serdev_device_close(hu->serdev);
@@ -2281,6 +2521,10 @@ static const struct qca_device_data qca_soc_data_wcn7860 __maybe_unused = {
 			QCA_CAP_HFP_HW_OFFLOAD,
 };
 
+static const struct qca_device_data qca_soc_data_brahma20 __maybe_unused = {
+	.soc_type = QCA_BRAHMA_2_0,
+};
+
 static void qca_power_off(struct hci_uart *hu)
 {
 	struct qca_serdev *qcadev;
@@ -2341,7 +2585,10 @@ static void qca_power_off(struct hci_uart *hu)
 	}
 
 	if (power && power->pwrseq) {
-		pwrseq_power_off(power->pwrseq);
+		if (soc_type != QCA_BRAHMA_2_0 || power->vregs_on)
+			pwrseq_power_off(power->pwrseq);
+		if (soc_type == QCA_BRAHMA_2_0)
+			power->vregs_on = false;
 		set_bit(QCA_BT_OFF, &qca->flags);
 		return;
         }
@@ -2400,8 +2647,16 @@ static int qca_regulator_enable(struct qca_serdev *qcadev)
 	struct qca_power *power = qcadev->bt_power;
 	int ret;
 
-	if (power->pwrseq)
-		return pwrseq_power_on(power->pwrseq);
+	if (power->pwrseq) {
+		if (qcadev->btsoc_type != QCA_BRAHMA_2_0)
+			return pwrseq_power_on(power->pwrseq);
+		if (power->vregs_on)
+			return 0;
+		ret = pwrseq_power_on(power->pwrseq);
+		if (!ret)
+			power->vregs_on = true;
+		return ret;
+	}
 
 	/* Already enabled */
 	if (power->vregs_on)
@@ -2512,6 +2767,7 @@ static int qca_serdev_probe(struct serdev_device *serdev)
 	case QCA_WCN6855:
 	case QCA_WCN7850:
 	case QCA_WCN7860:
+	case QCA_BRAHMA_2_0:
 		qcadev->bt_power = devm_kzalloc(&serdev->dev,
 						sizeof(struct qca_power),
 						GFP_KERNEL);
@@ -2523,6 +2779,18 @@ static int qca_serdev_probe(struct serdev_device *serdev)
 	}
 
 	switch (qcadev->btsoc_type) {
+	case QCA_BRAHMA_2_0:
+		/* Shared rails and BT_EN belong exclusively to the WCN PMU. */
+		if (qcadev->oper_speed != 8000000 ||
+		    device_property_present(&serdev->dev, "enable-gpios") ||
+		    device_property_present(&serdev->dev, "firmware-name"))
+			return -EINVAL;
+		qcadev->bt_power->pwrseq = devm_pwrseq_get(&serdev->dev, "bluetooth");
+		if (IS_ERR(qcadev->bt_power->pwrseq))
+			return dev_err_probe(&serdev->dev,
+					     PTR_ERR(qcadev->bt_power->pwrseq),
+					     "Brahma requires shared WCN power sequence\n");
+		break;
 	case QCA_WCN3950:
 	case QCA_WCN3988:
 	case QCA_WCN3990:
@@ -2669,6 +2937,7 @@ static void qca_serdev_remove(struct serdev_device *serdev)
 	case QCA_WCN6855:
 	case QCA_WCN7850:
 	case QCA_WCN7860:
+	case QCA_BRAHMA_2_0:
 		if (power->vregs_on)
 			qca_power_off(&qcadev->serdev_hu);
 		break;
@@ -2872,6 +3141,7 @@ static const struct of_device_id qca_bluetooth_of_match[] = {
 	{ .compatible = "qcom,wcn6855-bt", .data = &qca_soc_data_wcn6855},
 	{ .compatible = "qcom,wcn7850-bt", .data = &qca_soc_data_wcn7850},
 	{ .compatible = "qcom,wcn7860-bt", .data = &qca_soc_data_wcn7860},
+	{ .compatible = "oneplus,opd2413-brahma20-bt", .data = &qca_soc_data_brahma20},
 	{ /* sentinel */ }
 };
 MODULE_DEVICE_TABLE(of, qca_bluetooth_of_match);

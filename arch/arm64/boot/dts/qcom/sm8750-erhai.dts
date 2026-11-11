@@ -2308,7 +2308,7 @@
 	status = "okay";
 
 	bluetooth {
-		compatible = "qcom,wcn7860-bt";
+		compatible = "oneplus,opd2413-brahma20-bt";
 
 		vddrfacmn-supply = <&vreg_pmu_rfa_cmn>;
 		vddaon-supply = <&vreg_pmu_aon_0p59>;
@@ -2318,7 +2318,7 @@
 		vddrfa1p2-supply = <&vreg_pmu_rfa_1p2>;
 		vddrfa1p8-supply = <&vreg_pmu_rfa_1p8>;
 
-		max-speed = <3200000>;
+		max-speed = <8000000>;
 	};
 };
 

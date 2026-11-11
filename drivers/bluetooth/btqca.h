@@ -74,6 +74,7 @@ enum qca_baudrate {
 	QCA_BAUDRATE_1600000,
 	QCA_BAUDRATE_3200000,
 	QCA_BAUDRATE_3500000,
+	QCA_BAUDRATE_8000000	= 0x15,
 	QCA_BAUDRATE_AUTO	= 0xFE,
 	QCA_BAUDRATE_RESERVED
 };
@@ -112,6 +113,14 @@ struct qca_btsoc_version {
 	__le16 rom_ver;
 	__le32 soc_id;
 } __packed;
+
+/* OPD2413's observed Brahma 2.0 ROM, checked before changing baud. */
+static inline bool qca_brahma20_version_valid(struct qca_btsoc_version ver)
+{
+	return le32_to_cpu(ver.product_id) == 0x21 &&
+	       le16_to_cpu(ver.rom_ver) == 0x0200 &&
+	       le32_to_cpu(ver.soc_id) == 0x40210200;
+}
 
 struct tlv_seg_resp {
 	__u8 result;
@@ -159,6 +168,7 @@ enum qca_btsoc_type {
 	QCA_WCN6855,
 	QCA_WCN7850,
 	QCA_WCN7860,
+	QCA_BRAHMA_2_0,
 };
 
 #if IS_ENABLED(CONFIG_BT_QCA)

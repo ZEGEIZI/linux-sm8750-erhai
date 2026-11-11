@@ -74,6 +74,8 @@
 /* UART S_CMD OP codes */
 #define UART_START_READ			0x1
 #define UART_PARAM			0x1
+#define UART_PARAM_SKIP_FRAME_ERR_CHAR	BIT(5)
+#define UART_PARAM_SKIP_BREAK_CHAR	BIT(6)
 #define UART_PARAM_RFR_OPEN		BIT(7)
 
 #define UART_OVERSAMPLING		32
@@ -614,7 +616,6 @@ static void handle_rx_console(struct uart_port *uport, u32 bytes, bool drop)
 #else
 static void handle_rx_console(struct uart_port *uport, u32 bytes, bool drop)
 {
-
 }
 #endif /* CONFIG_SERIAL_QCOM_GENI_CONSOLE */
 
@@ -875,19 +876,36 @@ static void qcom_geni_serial_stop_rx_dma(struct uart_port *uport)
 static void qcom_geni_serial_start_rx_dma(struct uart_port *uport)
 {
 	struct qcom_geni_serial_port *port = to_dev_port(uport);
+	bool opd2413 = of_machine_is_compatible("oneplus,opd2413") &&
+		       uport->mapbase == 0x898000 && !uart_console(uport);
 	int ret;
 
 	if (qcom_geni_serial_secondary_active(uport))
 		qcom_geni_serial_stop_rx_dma(uport);
 
-	geni_se_setup_s_cmd(&port->se, UART_START_READ, UART_PARAM_RFR_OPEN);
+	if (!opd2413)
+		geni_se_setup_s_cmd(&port->se, UART_START_READ, UART_PARAM_RFR_OPEN);
 
 	ret = geni_se_rx_dma_prep(&port->se, port->rx_buf,
 				  DMA_RX_BUF_SIZE,
 				  &port->rx_dma_addr);
 	if (ret) {
+		if (opd2413)
+			port->rx_dma_addr = 0;
 		dev_err(uport->dev, "unable to start RX SE DMA: %d\n", ret);
 		qcom_geni_serial_stop_rx_dma(uport);
+		return;
+	}
+
+	if (opd2413) {
+		/* The OEM arms the DMA buffer before starting RX and skips
+		 * framing-error and break characters during baud transitions.
+		 */
+		geni_se_setup_s_cmd(&port->se, UART_START_READ,
+				    UART_PARAM_RFR_OPEN |
+				    UART_PARAM_SKIP_FRAME_ERR_CHAR |
+				    UART_PARAM_SKIP_BREAK_CHAR);
+		readl(uport->membase + SE_GENI_STATUS);
 	}
 }
 
@@ -1171,7 +1189,6 @@ static int setup_fifos(struct qcom_geni_serial_port *port)
 	return 0;
 }
 
-
 static void qcom_geni_serial_shutdown(struct uart_port *uport)
 {
 	disable_irq(uport->irq);
@@ -1319,8 +1336,13 @@ static int geni_serial_set_rate(struct uart_port *uport, unsigned int baud)
 
 	writel(ser_clk_cfg, uport->membase + GENI_SER_M_CLK_CFG);
 	writel(ser_clk_cfg, uport->membase + GENI_SER_S_CLK_CFG);
-	/* Configure clock selection register with the selected clock index */
-	writel(clk_idx & CLK_SEL_MSK, uport->membase + SE_GENI_CLK_SEL);
+	/* OPD2413 uses the direct GCC rate table, whose 8 Mbps entry is
+	 * index 15, not a three-bit DFS slot. The OEM UART never writes this
+	 * selector. Preserve its boot setting for this controller only.
+	 */
+	if (!of_machine_is_compatible("oneplus,opd2413") ||
+	    uport->mapbase != 0x898000)
+		writel(clk_idx & CLK_SEL_MSK, uport->membase + SE_GENI_CLK_SEL);
 	return 0;
 }
 
@@ -1367,6 +1389,8 @@ static void qcom_geni_serial_set_termios(struct uart_port *uport,
 	struct qcom_geni_serial_port *port = to_dev_port(uport);
 	unsigned int baud;
 	unsigned long timeout;
+	unsigned long flags;
+	bool restart_rx = false;
 	u32 bits_per_char;
 	u32 tx_trans_cfg;
 	u32 tx_parity_cfg;
@@ -1378,9 +1402,31 @@ static void qcom_geni_serial_set_termios(struct uart_port *uport,
 	/* baud rate */
 	baud = uart_get_baud_rate(uport, termios, old, 300, 8000000);
 
+	/* The OPD2413 OEM driver quiesces RX before programming a new
+	 * rate. Keep IRQ/DMA callbacks out of the stopped RX sequence, but
+	 * release the port lock before the potentially sleeping OPP update.
+	 * Restore only a receiver that was active on entry.
+	 */
+	if (of_machine_is_compatible("oneplus,opd2413") &&
+	    uport->mapbase == 0x898000 && port->setup &&
+	    !uart_console(uport)) {
+		uart_port_lock_irqsave(uport, &flags);
+		restart_rx = qcom_geni_serial_secondary_active(uport);
+		if (restart_rx) {
+			qcom_geni_serial_stop_rx(uport);
+			if (qcom_geni_serial_secondary_active(uport)) {
+				uart_port_unlock_irqrestore(uport, flags);
+				dev_err_ratelimited(uport->dev,
+					"OPD2413_UART_RX_QUIESCE failed; rate unchanged\n");
+				return;
+			}
+		}
+		uart_port_unlock_irqrestore(uport, flags);
+	}
+
 	ret = port->dev_data->set_rate(uport, baud);
 	if (ret)
-		return;
+		goto restore_rx;
 
 	/* parity */
 	tx_trans_cfg = readl(uport->membase + SE_UART_TX_TRANS_CFG);
@@ -1434,6 +1480,22 @@ static void qcom_geni_serial_set_termios(struct uart_port *uport,
 		port->manual_flow = true;
 	}
 
+	/* CTS is gated by the UART itself. Do not let serial_core latch
+	 * hw_stopped from a transient CTS sample: this driver does not
+	 * provide CTS-change interrupts to release such a software stop.
+	 */
+	if (of_machine_is_compatible("oneplus,opd2413") &&
+	    uport->mapbase == 0x898000 && !uart_console(uport)) {
+		unsigned long flags;
+
+		uart_port_lock_irqsave(uport, &flags);
+		if (termios->c_cflag & CRTSCTS)
+			uport->status |= UPSTAT_AUTOCTS;
+		else
+			uport->status &= ~UPSTAT_AUTOCTS;
+		uart_port_unlock_irqrestore(uport, flags);
+	}
+
 	if (baud) {
 		uart_update_timeout(uport, termios->c_cflag, baud);
 
@@ -1459,6 +1521,24 @@ static void qcom_geni_serial_set_termios(struct uart_port *uport,
 	writel(bits_per_char, uport->membase + SE_UART_TX_WORD_LEN);
 	writel(bits_per_char, uport->membase + SE_UART_RX_WORD_LEN);
 	writel(stop_bit_len, uport->membase + SE_UART_TX_STOP_BIT_LEN);
+
+	/* The OEM restores automatic RFR before restarting RX when hardware
+	 * flow control is selected. Do not leave the restarted receiver
+	 * behind the manual NOT_READY state from the baud transaction.
+	 */
+	if (of_machine_is_compatible("oneplus,opd2413") &&
+	    uport->mapbase == 0x898000 && port->setup &&
+	    !uart_console(uport) && (termios->c_cflag & CRTSCTS)) {
+		writel(0, uport->membase + SE_UART_MANUAL_RFR);
+		readl(uport->membase + SE_UART_MANUAL_RFR);
+	}
+
+restore_rx:
+	if (restart_rx) {
+		uart_port_lock_irqsave(uport, &flags);
+		qcom_geni_serial_start_rx(uport);
+		uart_port_unlock_irqrestore(uport, flags);
+	}
 }
 
 #ifdef CONFIG_SERIAL_QCOM_GENI_CONSOLE
@@ -1744,7 +1824,6 @@ static void qcom_geni_serial_pm(struct uart_port *uport,
 	else if (new_state == UART_PM_STATE_OFF &&
 		 old_state == UART_PM_STATE_ON)
 		pm_runtime_put_sync(uport->dev);
-
 }
 
 /**

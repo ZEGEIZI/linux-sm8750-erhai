@@ -16,6 +16,7 @@ properties:
     enum:
       - qcom,wcn7850-bt
       - qcom,wcn7860-bt
+      - oneplus,opd2413-brahma20-bt
 
   enable-gpios:
     maxItems: 1
@@ -74,6 +75,18 @@ allOf:
   - $ref: bluetooth-controller.yaml#
   - $ref: qcom,bluetooth-common.yaml
   - $ref: /schemas/serial/serial-peripheral-props.yaml#
+  - if:
+      properties:
+        compatible:
+          const: oneplus,opd2413-brahma20-bt
+    then:
+      properties:
+        max-speed:
+          const: 8000000
+        enable-gpios: false
+        firmware-name: false
+      required:
+        - max-speed
 
 unevaluatedProperties: false
 

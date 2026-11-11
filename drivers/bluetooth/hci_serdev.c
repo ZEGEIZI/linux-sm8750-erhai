@@ -84,8 +84,12 @@ static void hci_uart_write_work(struct work_struct *work)
 			kfree_skb(skb);
 		}
 
-		clear_bit(HCI_UART_SENDING, &hu->tx_state);
+		clear_bit_unlock(HCI_UART_SENDING, &hu->tx_state);
 	} while (test_bit(HCI_UART_TX_WAKEUP, &hu->tx_state));
+
+	/* Publish TX completion before testing the bit wait queue. */
+	smp_mb__after_atomic();
+	wake_up_bit(&hu->tx_state, HCI_UART_SENDING);
 }
 
 /* ------- Interface to HCI layer ------ */

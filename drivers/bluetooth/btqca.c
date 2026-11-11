@@ -321,12 +321,16 @@ static int qca_tlv_check_data(struct hci_dev *hdev,
 	struct tlv_type_nvm *tlv_nvm;
 	uint8_t nvm_baud_rate = config->user_baud_rate;
 	u8 type;
+	bool brahma_uart_seen = false, brahma_sleep_seen = false;
 
 	config->dnld_mode = QCA_SKIP_EVT_NONE;
 	config->dnld_type = QCA_SKIP_EVT_NONE;
 
 	switch (config->type) {
 	case ELF_TYPE_PATCH:
+		if (soc_type == QCA_BRAHMA_2_0 &&
+		    (fw_size < 52 || memcmp(fw_data, "\177ELF\1\1\1", 7)))
+			return -EINVAL;
 		if (fw_size < 7)
 			return -EINVAL;
 
@@ -344,6 +348,13 @@ static int qca_tlv_check_data(struct hci_dev *hdev,
 		tlv = (struct tlv_type_hdr *)fw_data;
 		type_len = le32_to_cpu(tlv->type_len);
 		tlv_patch = (struct tlv_type_patch *)tlv->data;
+		if (soc_type == QCA_BRAHMA_2_0 &&
+		    ((type_len & 0xff) != TLV_TYPE_PATCH ||
+		     (type_len >> 8) != fw_size - sizeof(*tlv) ||
+		     le16_to_cpu(tlv_patch->product_id) != 0x21 ||
+		     le16_to_cpu(tlv_patch->rom_build) != 0x0200))
+			return -EINVAL;
+
 
 		/* For Rome version 1.1 to 3.1, all segment commands
 		 * are acked by a vendor specific event (VSE).
@@ -388,6 +399,11 @@ static int qca_tlv_check_data(struct hci_dev *hdev,
 		type_len = le32_to_cpu(tlv->type_len);
 		length = type_len >> 8;
 		type = type_len & 0xff;
+		/* The captured Brahma 2.0 format has one unwrapped tag set. */
+		if (soc_type == QCA_BRAHMA_2_0 &&
+		    (type != 2 || length != fw_size - sizeof(*tlv)))
+			return -EINVAL;
+
 
 		/* Some NVM files have more than one set of tags, only parse
 		 * the first set when it has type 2 for now. When there is
@@ -435,6 +451,17 @@ static int qca_tlv_check_data(struct hci_dev *hdev,
 				break;
 
 			case EDL_TAG_ID_HCI:
+				if (soc_type == QCA_BRAHMA_2_0) {
+					/* Preserve the OEM UART tag. Its first byte is the
+					 * observed 8M selector; the older layout is different.
+					 */
+					if (brahma_uart_seen || tag_len != 6 ||
+					    nvm_baud_rate != QCA_BAUDRATE_8000000 ||
+					    tlv_nvm->data[0] != nvm_baud_rate)
+						return -EINVAL;
+					brahma_uart_seen = true;
+					break;
+				}
 				if (tag_len < 3)
 					return -EINVAL;
 
@@ -453,6 +480,13 @@ static int qca_tlv_check_data(struct hci_dev *hdev,
 				break;
 
 			case EDL_TAG_ID_DEEP_SLEEP:
+				if (soc_type == QCA_BRAHMA_2_0) {
+					if (brahma_sleep_seen || tag_len != 14 ||
+					    !(tlv_nvm->data[0] & 1))
+						return -EINVAL;
+					brahma_sleep_seen = true;
+					break;
+				}
 				if (tag_len < 1)
 					return -EINVAL;
 
@@ -466,6 +500,9 @@ static int qca_tlv_check_data(struct hci_dev *hdev,
 
 			idx += sizeof(struct tlv_type_nvm) + tag_len;
 		}
+		if (soc_type == QCA_BRAHMA_2_0 &&
+		    (idx != length || !brahma_uart_seen || !brahma_sleep_seen))
+			return -EINVAL;
 		break;
 
 	default:
@@ -578,6 +615,7 @@ static int qca_download_firmware(struct hci_dev *hdev,
 	u8 *data;
 	const u8 *segment;
 	int ret, size, remain, i = 0;
+	unsigned int trace_segments = 0, trace_bytes = 0;
 
 	bt_dev_info(hdev, "QCA Downloading %s", config->fwname);
 
@@ -586,7 +624,8 @@ static int qca_download_firmware(struct hci_dev *hdev,
 		/* If the board-specific file is missing, try loading the default
 		 * one, unless that was attempted already.
 		 */
-		if (config->type == TLV_TYPE_NVM &&
+		if (soc_type != QCA_BRAHMA_2_0 &&
+		    config->type == TLV_TYPE_NVM &&
 		    qca_get_alt_nvm_file(config->fwname, sizeof(config->fwname))) {
 			bt_dev_info(hdev, "QCA Downloading %s", config->fwname);
 			ret = request_firmware(&fw, config->fwname, &hdev->dev);
@@ -618,6 +657,8 @@ static int qca_download_firmware(struct hci_dev *hdev,
 	if (ret)
 		goto out;
 
+	if (soc_type == QCA_BRAHMA_2_0)
+		bt_dev_info(hdev, "BRAHMA_TLV_BEGIN type=%u bytes=%d mode=%u", config->type, size, config->dnld_mode);
 	segment = data;
 	remain = size;
 	while (remain > 0) {
@@ -630,11 +671,15 @@ static int qca_download_firmware(struct hci_dev *hdev,
 		if (!remain || segsize < MAX_SIZE_PER_TLV_SEGMENT)
 			config->dnld_mode = QCA_SKIP_EVT_NONE;
 
+		if (soc_type == QCA_BRAHMA_2_0 && (!trace_segments || !remain))
+			bt_dev_info(hdev, "BRAHMA_TLV_SEGMENT index=%u len=%d remaining=%d mode=%u queued_bytes=%u", trace_segments, segsize, remain, config->dnld_mode, trace_bytes);
 		ret = qca_tlv_send_segment(hdev, segsize, segment,
 					   config->dnld_mode, soc_type);
 		if (ret)
 			goto out;
 
+		trace_segments++;
+		trace_bytes += segsize;
 		segment += segsize;
 	}
 
@@ -649,6 +694,8 @@ static int qca_download_firmware(struct hci_dev *hdev,
 		ret = qca_inject_cmd_complete_event(hdev);
 
 out:
+	if (soc_type == QCA_BRAHMA_2_0)
+		bt_dev_info(hdev, "BRAHMA_TLV_END ret=%d accepted_segments=%u accepted_bytes=%u total=%d", ret, trace_segments, trace_bytes, size);
 	vfree(data);
 
 	return ret;
@@ -782,6 +829,12 @@ int qca_uart_setup(struct hci_dev *hdev, uint8_t baudrate,
 
 	bt_dev_info(hdev, "QCA controller version 0x%08x", soc_ver);
 
+	if (soc_type == QCA_BRAHMA_2_0 &&
+	    (!qca_brahma20_version_valid(ver) ||
+	     baudrate != QCA_BAUDRATE_8000000 ||
+	     firmware_name || rampatch_name))
+		return -EINVAL;
+
 	config.user_baud_rate = baudrate;
 
 	/* Firmware files to download are based on ROM version.
@@ -850,6 +903,11 @@ int qca_uart_setup(struct hci_dev *hdev, uint8_t baudrate,
 			snprintf(config.fwname, sizeof(config.fwname),
 				 "qca/gngbtfw%02x.mbn", rom_ver);
 			break;
+		case QCA_BRAHMA_2_0:
+			config.type = ELF_TYPE_PATCH;
+			snprintf(config.fwname, sizeof(config.fwname),
+				 "qca/oneplus/opd2413/brhbtfw20.mbn");
+			break;
 		default:
 			snprintf(config.fwname, sizeof(config.fwname),
 				 "qca/rampatch_%08x.bin", soc_ver);
@@ -885,6 +943,17 @@ int qca_uart_setup(struct hci_dev *hdev, uint8_t baudrate,
 
 	if (soc_type == QCA_QCA2066 || soc_type == QCA_WCN7850 || soc_type == QCA_WCN7860)
 		qca_read_fw_board_id(hdev, &boardid);
+
+	if (soc_type == QCA_BRAHMA_2_0) {
+		err = qca_read_fw_board_id(hdev, &boardid);
+		if (err)
+			return err;
+		if (boardid == 0xffff) {
+			bt_dev_err(hdev, "Brahma board ID unavailable; NVM not selected");
+			return -ENODEV;
+		}
+		bt_dev_info(hdev, "Brahma board ID 0x%04x", boardid);
+	}
 
 	/* Download NVM configuration */
 	config.type = TLV_TYPE_NVM;
@@ -947,6 +1016,16 @@ int qca_uart_setup(struct hci_dev *hdev, uint8_t baudrate,
 		case QCA_WCN7860:
 			qca_get_nvm_name_by_board(config.fwname, sizeof(config.fwname),
 				 "gngbtnv", soc_type, ver, rom_ver, boardid);
+			break;
+		case QCA_BRAHMA_2_0:
+			/* OEM BID 0000 selects the measured default NVM. */
+			if (!boardid) {
+				snprintf(config.fwname, sizeof(config.fwname),
+					 "qca/oneplus/opd2413/brhbtnv20.bin");
+				break;
+			}
+			qca_get_nvm_name_by_board(config.fwname, sizeof(config.fwname),
+				 "oneplus/opd2413/brhbtnv20", soc_type, ver, 0, boardid);
 			break;
 		default:
 			snprintf(config.fwname, sizeof(config.fwname),

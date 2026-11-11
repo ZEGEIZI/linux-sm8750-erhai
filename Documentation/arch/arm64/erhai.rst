@@ -49,6 +49,25 @@ Firmware binaries, per-device data, initramfs, root filesystems and boot
 images are maintained separately. Each distribution supplies the matching
 firmware and its own packaging, initramfs and boot integration.
 
+Bluetooth identity
+------------------
+
+OPD2413's WCN7860 firmware does not supply a usable per-unit public address
+by itself. The Android 16 vendor stack obtains the factory address from an
+OEM NVRAM service, backed by the redundant ``nonmodemst1`` and ``nonmodemst2``
+GPT partitions, and supplies it to the controller. It is not supplied in the
+stock device tree on the tested tablet.
+
+Distributions can initialize the controller through the standard Linux
+Bluetooth MGMT interface before BlueZ starts. The per-device factory record
+is bound to the SoC serial exposed by the standard ``socinfo`` driver; keep
+``CONFIG_QCOM_SOCINFO`` enabled and load ``socinfo`` before userspace factory
+identity extraction. Do not hard-code an individual tablet's address in the
+shared DTS, kernel or firmware package, and do not erase the factory partitions.
+Factory data extraction, integrity checks, state files and service packaging
+belong in distribution userspace. This identity initialization does not replace
+the UART, power sequencing or firmware setup performed by the kernel driver.
+
 Display precision and HDR
 -------------------------
 
@@ -76,3 +95,34 @@ DPU change has been tested on this tablet in the NixOS ``color1`` kernel.
 That validated kernel must remain available until a new build from this
 shared tree passes hardware testing; source integration alone does not
 validate a replacement kernel.
+
+OPD2413 OEM Bluetooth bootstrap
+------------------------------
+
+The board Bluetooth node selects ``oneplus,opd2413-brahma20-bt`` at 8 Mbps.
+This is an explicit OEM protocol choice, separate from generic
+``qcom,wcn7860-bt`` support. The shared WCN PMU owns the supplies and BT_EN;
+do not add another enable GPIO or override the firmware-name property.
+
+The bootstrap first loads the Peripheral patch/NVM and TME-L image, then
+activates Bluetooth and downloads its patch and board-selected NVM. Required
+files under ``qca/oneplus/opd2413/`` are ``brhperifw20.mbn``,
+``brhperinv20.bin``, ``tmel_peach_20.elf``, ``brhbtfw20.mbn`` and
+``brhbtnv20.bin`` (or the measured board-ID variant). Firmware absence or
+unexpected ROM identity fails setup; this path does not silently run ROM
+firmware. Distributions must package the original-device firmware separately.
+The hardware's factory Bluetooth address is still provisioned by userspace.
+
+The protocol and board UART RX/baud/CTS handling are adapted from ArmadaOS
+``devices/oneplus-pad2pro/kernel/current/final-modules`` at reference
+``937d88a2c28a67153d572bcf7f89049eaada93f2`` (GPL-2.0-only), whose implementation
+was verified against the OPD2413 Android bootstrap. Original driver copyright
+notices remain. This port preserves the newer base's IBS power-off fixes,
+serial suspend/resume implementation and generic WCN7860 support. Full kernel
+bring-up and device acceptance are required before promoting this candidate.
+
+Run the protocol parser and transport failure checks from the source root::
+
+    cc -std=c11 -Wall -Wextra -Werror -fsanitize=address,undefined \
+      tools/testing/selftests/bluetooth/brahma-peripheral-test.c -o /tmp/brahma-test
+    /tmp/brahma-test
