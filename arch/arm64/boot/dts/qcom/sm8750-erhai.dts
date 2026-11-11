@@ -21,9 +21,13 @@
 #include "pmk8550.dtsi"
 #include "sm8750-pmics.dtsi"
 
+/delete-node/ &cpusys_vm_mem;
+
 / {
 	model = "OnePlus Pad 2 Pro";
 	compatible = "oneplus,opd2413", "oneplus,erhai", "qcom,sm8750";
+	qcom,mainline-model = "OnePlus Pad 2 Pro";
+	qcom,mainline-compatible = "oneplus,opd2413", "oneplus,erhai", "qcom,sm8750";
 	chassis-type = "tablet";
 
 	aliases {
@@ -2273,6 +2277,10 @@
 
 &gpu {
 	status = "okay";
+};
+
+&gunyah_hyp_mem {
+	reg = <0x0 0x80000000 0x0 0x1200000>;
 };
 
 &gpu_zap_shader {

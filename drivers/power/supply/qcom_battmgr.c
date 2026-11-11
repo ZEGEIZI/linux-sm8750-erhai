@@ -16,6 +16,7 @@
 #include <linux/of.h>
 #include <linux/of_device.h>
 #include <linux/power_supply.h>
+#include <linux/pm_wakeup.h>
 #include <linux/property.h>
 #include <linux/soc/qcom/pdr.h>
 #include <linux/soc/qcom/pmic_glink.h>
@@ -489,6 +490,8 @@ struct qcom_battmgr {
 	bool charge_inhibited;
 	bool charge_error;
 	bool charge_policy_hold;
+	struct wakeup_source *charge_ws;
+	bool charge_awake; /* protected by notify_lock */
 
 	/*
 	 * USB VBUS boost: @otg_request follows the firmware notifications,
@@ -1034,6 +1037,47 @@ static bool qcom_battmgr_charge_limited(struct qcom_battmgr *battmgr)
 	return end && end < CHARGE_CTRL_END_THR_MAX;
 }
 
+/* Stock wired wakelock, restricted to charging with software SOC protection. */
+static void qcom_battmgr_charge_wake_locked(struct qcom_battmgr *battmgr, bool awake)
+{
+	lockdep_assert_held(&battmgr->notify_lock);
+	awake = awake && (battmgr->quirks & QCOM_BATTMGR_QUIRK_CHARGE_ENABLE) &&
+		qcom_battmgr_charge_limited(battmgr) &&
+		battmgr->service_up && !battmgr->removing;
+	if (battmgr->charge_awake == awake)
+		return;
+	battmgr->charge_awake = awake;
+	if (awake)
+		__pm_stay_awake(battmgr->charge_ws);
+	else
+		__pm_relax(battmgr->charge_ws);
+}
+
+static void qcom_battmgr_charge_wake_poll(struct qcom_battmgr *battmgr, bool allowed)
+{
+	u32 online, health;
+
+	allowed = allowed && qcom_battmgr_charge_limited(battmgr) &&
+		!READ_ONCE(battmgr->otg_request);
+	/* Never retain a wake lock from cached online or health telemetry. */
+	if (allowed)
+		allowed = !qcom_battmgr_get_property(battmgr, BATTMGR_USB_PROPERTY_GET,
+						    USB_ONLINE, &online) && online == 1 &&
+			  !qcom_battmgr_get_property(battmgr, BATTMGR_BAT_PROPERTY_GET,
+						    BATT_HEALTH, &health) &&
+			  health == POWER_SUPPLY_HEALTH_GOOD;
+	scoped_guard(spinlock_irqsave, &battmgr->notify_lock)
+		qcom_battmgr_charge_wake_locked(battmgr, allowed);
+}
+
+static void qcom_battmgr_charge_wake_remove(void *data)
+{
+	struct qcom_battmgr *battmgr = data;
+
+	__pm_relax(battmgr->charge_ws);
+	wakeup_source_unregister(battmgr->charge_ws);
+}
+
 static int qcom_battmgr_charge_enable(struct qcom_battmgr *battmgr, bool enable)
 {
 	int ret;
@@ -1070,12 +1114,15 @@ static void qcom_battmgr_charge_limit_update(struct qcom_battmgr *battmgr)
 			battmgr->charge_inhibited = false;
 			dev_info(battmgr->dev, "charge limit removed, charging resumed\n");
 		}
+		qcom_battmgr_charge_wake_poll(battmgr, false);
 		return;
 	}
 
 	ret = qcom_battmgr_bat_sm8350_update(battmgr, POWER_SUPPLY_PROP_CAPACITY);
-	if (ret)
+	if (ret) {
+		qcom_battmgr_charge_wake_poll(battmgr, false);
 		return;
+	}
 
 	soc = battmgr->status.percent;
 	if (soc >= end) {
@@ -1098,6 +1145,9 @@ static void qcom_battmgr_charge_limit_update(struct qcom_battmgr *battmgr)
 				 soc, start);
 		}
 	}
+
+	/* Keep checking until a stop request succeeds; never sleep past the limit. */
+	qcom_battmgr_charge_wake_poll(battmgr, !battmgr->charge_inhibited);
 }
 
 /* Caller owns @lock until it has consumed the PDO array. */
@@ -1583,6 +1633,15 @@ static int qcom_battmgr_pm_notify(struct notifier_block *nb,
 		WRITE_ONCE(battmgr->pps_suspended, true);
 		cancel_delayed_work_sync(&battmgr->charge_work);
 		mutex_lock(&battmgr->charge_lock);
+		/* A direct suspend request can bypass the wakeup_count protocol. */
+		if (qcom_battmgr_charge_limited(battmgr))
+			qcom_battmgr_charge_limit_update(battmgr);
+		if (READ_ONCE(battmgr->charge_awake)) {
+			mutex_unlock(&battmgr->charge_lock);
+			WRITE_ONCE(battmgr->pps_suspended, false);
+			qcom_battmgr_charge_kick(battmgr);
+			return NOTIFY_BAD;
+		}
 		if (qcom_battmgr_pps_stop(battmgr)) {
 			mutex_unlock(&battmgr->charge_lock);
 			WRITE_ONCE(battmgr->pps_suspended, false);
@@ -1646,6 +1705,10 @@ static int qcom_battmgr_bat_set_property(struct power_supply *psy,
 		return -EINVAL;
 	}
 
+	if (!qcom_battmgr_charge_limited(battmgr)) {
+		scoped_guard(spinlock_irqsave, &battmgr->notify_lock)
+			qcom_battmgr_charge_wake_locked(battmgr, false);
+	}
 	qcom_battmgr_charge_kick(battmgr);
 
 	return ret;
@@ -2721,6 +2784,7 @@ static void qcom_battmgr_pdr_notify(void *priv, int state)
 		schedule_work(&battmgr->enable_work);
 	} else {
 		battmgr->service_up = false;
+		qcom_battmgr_charge_wake_locked(battmgr, false);
 		/* A restarted firmware charges again by default */
 		battmgr->charge_inhibited = false;
 		/* ... and starts with the boost off and without a PPS contract */
@@ -2812,6 +2876,7 @@ static void qcom_battmgr_stop_notifications(void *data)
 
 	guard(spinlock_irqsave)(&battmgr->notify_lock);
 	battmgr->removing = true;
+	qcom_battmgr_charge_wake_locked(battmgr, false);
 }
 
 static void qcom_battmgr_cancel_work(void *data)
@@ -3032,6 +3097,15 @@ static int qcom_battmgr_probe(struct auxiliary_device *adev,
 	mutex_init(&battmgr->charge_lock);
 	init_completion(&battmgr->ack);
 	battmgr->request_opcode = U32_MAX;
+
+	if (IS_ENABLED(CONFIG_PM_SLEEP)) {
+		battmgr->charge_ws = wakeup_source_register(dev, "qcom-battmgr-charge");
+		if (!battmgr->charge_ws)
+			return -ENOMEM;
+		ret = devm_add_action_or_reset(dev, qcom_battmgr_charge_wake_remove, battmgr);
+		if (ret)
+			return ret;
+	}
 
 	/* The client must outlive all supplies, work and their request waiters. */
 	battmgr->client = devm_pmic_glink_client_alloc(dev, PMIC_GLINK_OWNER_BATTMGR,

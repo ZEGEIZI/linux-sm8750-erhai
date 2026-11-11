@@ -1,9 +1,10 @@
 OnePlus Pad 2 Pro (OPD2413 / erhai)
 =================================
 
-This device kernel is shared by Linux distributions. It is based on
+This device kernel is shared by Linux distributions. Its original base is
 yzddmr6/linux-sm8750-erhai commit
-870167fad062e74f6de27e76db84d17cc49d8b84 (Linux 7.2.15).
+870167fad062e74f6de27e76db84d17cc49d8b84 (Linux 7.2.15), with upstream updates
+merged through fb18d39b1baeeac3698a8786c134a326235ead9f on erhai/v0.7.
 Existing source copyright and license notices are retained.
 
 Device support
@@ -15,7 +16,9 @@ Device support
   7520350aab464ec97c4945657a32fdf6725db342b0fde49959ad0bdcbd782fc1).
 * The board device tree includes oneplus,opd2413 as well as oneplus,erhai
   and qcom,sm8750, so firmware selection works without a distribution's
-  device identity overlay.
+  device identity overlay. The saved qcom,mainline-compatible list retains
+  the same identifiers when QCOM_ABL_ROOT_IDENTITY restores the root after
+  vendor ABL overlays.
 * CPS8601 requests optional firmware, preserves errors other than missing
   firmware and retains the factory firmware when no replacement is supplied.
 
