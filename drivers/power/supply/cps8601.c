@@ -1327,4 +1327,4 @@ module_i2c_driver(cps8601_driver);
 MODULE_AUTHOR("erhai mainline port");
 MODULE_DESCRIPTION("CPS8601 wireless pen charger driver");
 MODULE_LICENSE("GPL v2");
-MODULE_VERSION("nixos-optional-fw1");
+MODULE_VERSION("erhai-optional-fw1");

@@ -39,6 +39,14 @@ properties:
   backlight: true
   ports: true
 
+  qcom,dpu-8bpc-dither:
+    type: boolean
+    description:
+      Enable the Qualcomm DPU output dither block when reducing its 10-bit
+      internal pipeline to the panel's 8-bit RGB/DSC link. This does not change
+      the panel transport format or advertise HDR. Temporal dithering is not
+      enabled by this property.
+
 required:
   - compatible
   - reg

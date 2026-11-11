@@ -10,9 +10,11 @@
 #define pr_fmt(fmt)	"[drm:%s:%d] " fmt, __func__, __LINE__
 #include <linux/debugfs.h>
 #include <linux/kthread.h>
+#include <linux/of.h>
 #include <linux/seq_file.h>
 
 #include <drm/drm_atomic.h>
+#include <drm/drm_bridge.h>
 #include <drm/drm_crtc.h>
 #include <drm/drm_file.h>
 #include <drm/drm_probe_helper.h>
@@ -385,7 +387,27 @@ int dpu_encoder_get_crc(const struct drm_encoder *drm_enc, u32 *crcs, int pos)
 	return entries_added;
 }
 
-static void _dpu_encoder_setup_dither(struct dpu_hw_pingpong *hw_pp, unsigned bpc)
+/* Preserve low bits from the DPU's 10-bit pipeline on an 8-bit panel link.
+ * This is output quantization, not a claim of native 10-bit or HDR support.
+ * Based on Armada's opt-in 8bpc dither patch by enjihn.
+ */
+static bool dpu_encoder_panel_dithers_8bpc(struct drm_encoder *drm_enc)
+{
+	struct drm_bridge *last = drm_bridge_chain_get_last_bridge(drm_enc);
+	bool enabled;
+
+	if (!last)
+		return false;
+
+	enabled = last->of_node &&
+		of_property_read_bool(last->of_node, "qcom,dpu-8bpc-dither");
+	drm_bridge_put(last);
+
+	return enabled;
+}
+
+static void _dpu_encoder_setup_dither(struct dpu_hw_pingpong *hw_pp, unsigned bpc,
+				     bool panel_dithers_8bpc)
 {
 	struct dpu_hw_dither_cfg dither_cfg = { 0 };
 
@@ -398,6 +420,17 @@ static void _dpu_encoder_setup_dither(struct dpu_hw_pingpong *hw_pp, unsigned bp
 		dither_cfg.c1_bitdepth = 6;
 		dither_cfg.c2_bitdepth = 6;
 		dither_cfg.c3_bitdepth = 6;
+		dither_cfg.temporal_en = 0;
+		break;
+	case 8:
+		if (!panel_dithers_8bpc) {
+			hw_pp->ops.setup_dither(hw_pp, NULL);
+			return;
+		}
+		dither_cfg.c0_bitdepth = 8;
+		dither_cfg.c1_bitdepth = 8;
+		dither_cfg.c2_bitdepth = 8;
+		dither_cfg.c3_bitdepth = 8;
 		dither_cfg.temporal_en = 0;
 		break;
 	default:
@@ -1302,10 +1335,15 @@ static void _dpu_encoder_virt_enable_helper(struct drm_encoder *drm_enc)
 	if (dpu_enc->disp_info.intf_type == INTF_DSI &&
 			!WARN_ON(dpu_enc->num_phys_encs == 0)) {
 		unsigned bpc = dpu_enc->connector->display_info.bpc;
+		bool panel_dithers_8bpc = dpu_encoder_panel_dithers_8bpc(drm_enc);
+
+		if (bpc == 8 && panel_dithers_8bpc)
+			drm_info_once(drm_enc->dev, "8-bpc panel output dithering enabled\n");
 		for (i = 0; i < MAX_CHANNELS_PER_ENC; i++) {
 			if (!dpu_enc->hw_pp[i])
 				continue;
-			_dpu_encoder_setup_dither(dpu_enc->hw_pp[i], bpc);
+			_dpu_encoder_setup_dither(dpu_enc->hw_pp[i], bpc,
+						  panel_dithers_8bpc);
 		}
 	}
 }

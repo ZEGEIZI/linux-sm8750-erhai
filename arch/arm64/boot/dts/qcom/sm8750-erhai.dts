@@ -23,7 +23,7 @@
 
 / {
 	model = "OnePlus Pad 2 Pro";
-	compatible = "oneplus,erhai", "qcom,sm8750";
+	compatible = "oneplus,opd2413", "oneplus,erhai", "qcom,sm8750";
 	chassis-type = "tablet";
 
 	aliases {
@@ -1760,6 +1760,7 @@
 	panel: panel@0 {
 		compatible = "novatek,nt36536";
 		reg = <0>;
+		qcom,dpu-8bpc-dither;
 
 		reset-gpios = <&tlmm 98 GPIO_ACTIVE_LOW>;
 

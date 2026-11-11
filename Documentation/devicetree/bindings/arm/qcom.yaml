@@ -1126,6 +1126,12 @@ properties:
               - qcom,sm8750-qrd
           - const: qcom,sm8750
 
+      - description: OnePlus Pad 2 Pro (OPD2413)
+        items:
+          - const: oneplus,opd2413
+          - const: oneplus,erhai
+          - const: qcom,sm8750
+
       - items:
           - enum:
               - qcom,x1e001de-devkit
