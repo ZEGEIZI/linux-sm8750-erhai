@@ -6956,6 +6956,14 @@ static int ath12k_reg_chan_list_event(struct ath12k_base *ab, struct sk_buff *sk
 		goto mem_free;
 	}
 
+	/* A rejected or duplicate reply still finishes the pending request.
+	 * Keep its valid radio index before validation can discard the info.
+	 * Single-pdev firmware may also report other PHY IDs; do not index
+	 * the allocated radio array with those ignored event IDs.
+	 */
+	if (reg_info->phy_id < ab->num_radios)
+		pdev_idx = reg_info->phy_id;
+
 	ret = ath12k_reg_validate_reg_info(ab, reg_info);
 	if (ret == ATH12K_REG_STATUS_FALLBACK) {
 		ath12k_warn(ab, "failed to validate reg info %d\n", ret);

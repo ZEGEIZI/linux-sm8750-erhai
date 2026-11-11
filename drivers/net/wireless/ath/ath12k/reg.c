@@ -898,7 +898,9 @@ enum ath12k_reg_status ath12k_reg_validate_reg_info(struct ath12k_base *ab,
 		 * firmware retains the current regd. We print a failure info
 		 * and return from here.
 		 */
-		ath12k_warn(ab, "Failed to set the requested Country regulatory setting\n");
+		ath12k_warn(ab, "firmware rejected regulatory update for %c%c: status %u, phy %u\n",
+			    reg_info->alpha2[0], reg_info->alpha2[1],
+			    reg_info->status_code, reg_info->phy_id);
 		return ATH12K_REG_STATUS_DROP;
 	}
 

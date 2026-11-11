@@ -22,6 +22,19 @@ Device support
 * CPS8601 requests optional firmware, preserves errors other than missing
   firmware and retains the factory firmware when no replacement is supplied.
 
+The ath12k regulatory event handler completes requests for allocated radios
+even when firmware rejects a country update or repeats the current rules.
+An ignored reply must not leave subsequent regulatory work waiting for a
+timeout. Unsupported PHY identifiers are not used to index allocated radios;
+the firmware's retained regulatory rules and limits are unchanged.
+Run the host event-path regression check from the source root::
+
+    python3 tools/testing/selftests/net/ath12k-reg-event-test.py
+
+The check exercises the actual event handler and validator with synthetic
+replies, including rejection, duplicates, invalid radios and boot-time events.
+It does not establish Wi-Fi discovery latency or replace device testing.
+
 Building with standard Kbuild
 ----------------------------
 
