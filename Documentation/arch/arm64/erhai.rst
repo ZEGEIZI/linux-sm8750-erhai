@@ -35,6 +35,36 @@ The check exercises the actual event handler and validator with synthetic
 replies, including rejection, duplicates, invalid radios and boot-time events.
 It does not establish Wi-Fi discovery latency or replace device testing.
 
+OPD2413 range scans
+------------------
+
+The OEM WCN7860 HW2.0 firmware reports DBS_OR_SBS mode with two PHY
+frequency ranges, 4900--5320 and 4900--7125 MHz, while the driver exposes
+one logical radio. A full scan can complete and visit channel 40 without
+discovering its AP; a scan restricted to 5200 MHz discovers it immediately.
+Split scans at the firmware-derived boundary on this board, retaining the
+WCN7860, single-pdev, single-radio and DBS_OR_SBS checks. Other hardware
+continues to use its existing scan path.
+
+The implementation is adapted from danyi's ArmadaOS patch
+``0188-wifi-ath12k-baldur-range-scans.patch`` at reference
+``937d88a2c28a67153d572bcf7f89049eaada93f2``. It preserves channel, SSID and
+IE order, drains TX for associated single-channel batches, and hands an
+interrupted TX pause to firmware recovery. The existing regulatory band
+index corrections already match the reference and are not reapplied.
+An additional correction clears ``finish_queued`` for each new batch so
+the overall timeout can abort a later batch. Scan timeout work uses the
+wiphy work conversion by Runyu Xiao, from the reference's patch 1021.
+
+Run the actual-function host regression check::
+
+    python3 tools/testing/selftests/net/ath12k-range-scan-test.py
+
+The check covers guards, request order, TX pause/resume, completion,
+cancellation, allocation/start failures and a timeout after an intermediate
+completion. Successful host checks and compilation do not establish
+startup discovery latency; the new kernel still requires device acceptance.
+
 Building with standard Kbuild
 ----------------------------
 

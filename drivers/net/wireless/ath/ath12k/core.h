@@ -644,6 +644,10 @@ struct ath12k {
 		bool finish_queued;
 		struct wiphy_work vdev_clean_wk;
 		struct ath12k_link_vif *arvif;
+		struct ath12k_wmi_scan_req_arg *range_req;
+		u32 range_next;
+		u32 range_split_freq;
+		bool range_tx_paused;
 	} scan;
 
 	struct {
