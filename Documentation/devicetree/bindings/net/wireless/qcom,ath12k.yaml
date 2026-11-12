@@ -17,6 +17,7 @@ properties:
   compatible:
     enum:
       - pci17cb,1107  # WCN7850
+      - pci17cb,110e  # WCN7860
 
   reg:
     maxItems: 1
@@ -26,6 +27,8 @@ properties:
     description:
       If present, a board or platform specific string used to lookup
       usecase-specific firmware files for the device.
+
+  ieee80211-freq-limit: true
 
   vddaon-supply:
     description: VDD_AON supply regulator handle
@@ -66,6 +69,9 @@ required:
   - vddrfa1p8-supply
   - vddpcie0p9-supply
   - vddpcie1p8-supply
+
+allOf:
+  - $ref: ieee80211.yaml#
 
 additionalProperties: false
 
