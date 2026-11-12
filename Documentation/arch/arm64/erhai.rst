@@ -65,6 +65,37 @@ cancellation, allocation/start failures and a timeout after an intermediate
 completion. Successful host checks and compilation do not establish
 startup discovery latency; the new kernel still requires device acceptance.
 
+OPD2413 shipped WLAN bands
+-------------------------
+
+The shipping Android 16 configuration loaded from persist sets
+``BandCapability=3``. OnePlus's public SM8750 Android 16 Pad 2 Pro modules
+tree at ``cc463675855afb8702a263f415330a240f5cd919`` defines this value as
+2.4 GHz and 5 GHz in ``qcacld-3.0/components/mlme/dispatcher/inc/
+cfg_mlme_generic.h``. The running Android STA channel list also omits
+6 GHz. This is a shipped product configuration, not a claim that the
+WCN7860 silicon is incapable of 6 GHz.
+
+The board expresses that policy with the standard
+``ieee80211-freq-limit`` property. ath12k applies it to its private channel
+copies before wiphy registration. Registration records the limits in
+``orig_flags``, so later self-managed regulatory updates cannot re-enable
+the excluded channels. Boards without this property retain their existing
+channels. Firmware, country-code selection and the range-scan workaround
+are unchanged.
+
+On the previous kernel, wpa_supplicant explicitly aborted associated full
+scans at its 20-second deadline while 6 GHz batches were still running.
+Requesting only the 36 currently available 2.4/5 GHz channels through the
+same supplicant completed in 9.2 seconds. The new board limits still need
+full-build and device validation before replacing the accepted kernel.
+
+Check the compiled board policy and its interaction with actual cfg80211
+filtering and self-managed regulatory updates::
+
+    python3 tools/testing/selftests/net/ath12k-of-freq-test.py \
+        --dtb build/arch/arm64/boot/dts/qcom/sm8750-erhai.dtb
+
 Building with standard Kbuild
 ----------------------------
 
